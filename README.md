@@ -36,8 +36,6 @@ phpmyadmin:
     image: phpmyadmin # Para Windows o Linux
 ```
 
----
-
 Ahora procedemos a crear un archivo .env y lo llenamos con los datos correspondiente.
 
 El dato PMA_HOST, se trata del nombre que le damos al contenedor de mariadb en el archivo docker-compose.yml, que para este caso es mariadb, si lo cambia en ese archivo debe cambiarlo en el archivo env.
@@ -94,8 +92,6 @@ Podemos revisar si todo funciono correctamente con el siguiente comando.
 # docker ps
 ```
 
----
-
 Con esto ya podemos ingresar a las herramientas pgadmin4 y phpmyadmin, por ejemplo
 
 Para PgAdmin4:
@@ -109,6 +105,7 @@ Para PhpMyAdmin:
 
 Ya puedes empezar a trabajar en estas base de datos.
 
+---
 
 ### Links
 

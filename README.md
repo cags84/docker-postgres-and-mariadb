@@ -19,7 +19,8 @@ Ha sido probado en Linux, Windows y MacOS con procesador Apple Silicon.
 Clonamos el repositorio
 
 ```sh
-git clone git@github.com:cags84/docker-postgres-and-mariadb.git
+# git clone git@github.com:cags84/docker-postgres-and-mariadb.git
+# cd docker-postgres-and-mariadb
 ```
 
 Creamos un archivo .env y lo llenamos con los datos correspondiente.
@@ -57,6 +58,41 @@ PMA_ROOT_PASSWORD=PASSWORD_ROOT_MARIADB
 PMA_TZ=America/Bogota
 PMA_PORT=8082
 ```
+
+Una vez creado y configurado el archivo .env, podemos levantar los contenedores con los siguientes pasos.
+
+Ingresamos al directorio.
+
+```sh
+# cd docker-postgres-and-mariadb
+```
+
+Ejecutamos el siguiente comando.
+
+```sh
+# docker compose up -d
+```
+
+Podemos revisar si todo funciono correctamente con el siguiente comando.
+
+```sh
+# docker ps
+```
+
+---
+
+Con esto ya podemos ingresar a las herramientas pgadmin4 y phpmyadmin, por ejemplo
+
+Para PgAdmin4:
+
+ - http://localhost:8081
+
+Para PhpMyAdmin:
+
+ - http://localhost:8082
+
+
+Ya puedes empezar a trabajar en estas base de datos.
 
 
 ### Links

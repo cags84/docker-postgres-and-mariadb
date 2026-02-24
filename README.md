@@ -25,7 +25,7 @@ Clonamos el repositorio
 Ingresamos al directorio
 
 ```sh
-# # cd docker-postgres-and-mariadb
+# cd docker-postgres-and-mariadb
 ```
 
 *** IMPORTANTE *** por defecto la configuración esta preparada para MacOS con procesador Apple Silicon, por lo cual si necesita cambiar por otro sistema operativo por ejemplo Linux, debe cambiar este segmento en el archivo docker-compose.yml

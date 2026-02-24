@@ -20,10 +20,25 @@ Clonamos el repositorio
 
 ```sh
 # git clone git@github.com:cags84/docker-postgres-and-mariadb.git
-# cd docker-postgres-and-mariadb
 ```
 
-Creamos un archivo .env y lo llenamos con los datos correspondiente.
+Ingresamos al directorio
+
+```sh
+# # cd docker-postgres-and-mariadb
+```
+
+*** IMPORTANTE *** por defecto la configuración esta preparada para MacOS con procesador Apple Silicon, por lo cual si necesita cambiar por otro sistema operativo por ejemplo Linux, debe cambiar este segmento en el archivo docker-compose.yml
+
+```
+phpmyadmin:
+    #image: arm64v8/phpmyadmin:latest # Para MacOS
+    image: phpmyadmin # Para Windows o Linux
+```
+
+---
+
+Ahora procedemos a crear un archivo .env y lo llenamos con los datos correspondiente.
 
 El dato PMA_HOST, se trata del nombre que le damos al contenedor de mariadb en el archivo docker-compose.yml, que para este caso es mariadb, si lo cambia en ese archivo debe cambiarlo en el archivo env.
 

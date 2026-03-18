@@ -20,6 +20,10 @@ Clonamos el repositorio
 
 ```sh
 # git clone git@github.com:cags84/docker-postgres-and-mariadb.git
+
+o
+
+# git clone https://github.com/cags84/docker-postgres-and-mariadb.git
 ```
 
 Ingresamos al directorio
@@ -36,7 +40,7 @@ phpmyadmin:
     image: phpmyadmin # Para Windows o Linux
 ```
 
-Ahora procedemos a crear un archivo .env y lo llenamos con los datos correspondiente.
+Ahora procedemos a crear un archivo .env y lo llenamos con los datos correspondiente, recuerda que existe un ejemplo en el archivo .env.example
 
 El dato PMA_HOST, se trata del nombre que le damos al contenedor de mariadb en el archivo docker-compose.yml, que para este caso es mariadb, si lo cambia en ese archivo debe cambiarlo en el archivo env.
 
@@ -106,6 +110,27 @@ Para PhpMyAdmin:
 Ya puedes empezar a trabajar en estas base de datos.
 
 ---
+
+
+Comandos de gestion sobre los contenedores
+
+Si quieres apagar los contenedores, podemos ejecutar el siguiente comando
+
+```sh
+docker compose down -v
+```
+
+Si quieres borrar los volumenes podemos ejecutar el siguiente comando
+
+```sh
+docker volume prune -f
+```
+
+Podemos volver a subir los contenedores con el siguiente comando
+
+```sh
+docker compose up -d
+```
 
 ### Links
 

@@ -3,7 +3,6 @@ name: cluster-sql
 services:
   postgres:
     image: postgres:17-trixie
-    #user: "${UID}:${GID}" # Se habilita en linux
     container_name: postgres
     restart: always
     ports:
@@ -14,11 +13,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       TZ: ${POSTGRES_TZ}
     volumes:
-      - ./postgres:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
 
   pdAdmin4:
     image: dpage/pgadmin4
-    #user: "${UID}:${GID}" # Se habilita en linux
     container_name: pgadmin4
     restart: always
     depends_on:
@@ -29,14 +27,10 @@ services:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
     volumes:
-      - ./pgadmin:/var/lib/pgadmin
-      - ./pgadmin:/certs/server.cert
-      - ./pgadmin:/certs/server.key
-      - ./pgadmin:/pgadmin4/servers.json
+      - pgadmin_data:/var/lib/pgadmin
 
   mariadb:
     image: mariadb:lts-ubi9
-    #user: "${UID}:${GID}" # Se habilita en linux
     container_name: mariadb
     restart: always
     environment:
@@ -48,24 +42,80 @@ services:
     ports:
       - "${MARIADB_PORT}:3306"
     volumes:
-      - ./mariadb_data:/var/lib/mysql
-    #restart: unless-stopped
+      - mariadb_data:/var/lib/mysql
 
   phpmyadmin:
-    image: arm64v8/phpmyadmin:latest # Para MacOS
-    #image: phpmyadmin # Para Windows o Linux
-    #user: "${UID}:${GID}" # Se habilita en linux
+    #image: arm64v8/phpmyadmin:latest # Para MacOS
+    image: phpmyadmin # Para Windows o Linux
     restart: always
     ports:
       - "${PMA_PORT}:80" # Access phpMyAdmin via http://localhost:8082
     environment:
-      PMA_HOST: ${PMA_HOST} # Tells phpMyAdmin to connect to the 'db' service (container name)
+      PMA_HOST: mariadb # Tells phpMyAdmin to connect to the 'db' service (container name)
       MYSQL_ROOT_PASSWORD: ${PMA_ROOT_PASSWORD} # Use the same root password as the 'db' service
       PMA_ARBITRARY: 1 # Allows connecting to other hosts via the login page if needed
       TZ: ${PMA_TZ}
     depends_on:
       - mariadb # Ensures the 'db' container starts first
 
-#volumes:
-#  mariadb_data:
-#    driver: local
+  backup:
+    image: alpine:latest
+    container_name: db-backup
+    restart: always
+    depends_on:
+      - postgres
+      - mariadb
+    volumes:
+      - ./backups:/backups
+    environment:
+      UID: ${UID:-1000}
+      GID: ${GID:-1000}
+      PGPASSWORD: ${POSTGRES_PASS}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ${MARIADB_DATABASE}
+    entrypoint: >
+      sh -c "
+      apk update &&
+      apk add --no-cache postgresql-client mariadb-client netcat-openbsd tzdata &&
+
+      echo 'Waiting for databases...';
+
+      until pg_isready -h postgres -U $$POSTGRES_USER; do
+        echo 'Waiting for postgres...';
+        sleep 2;
+      done;
+
+      until nc -z mariadb 3306; do
+        echo 'Waiting for mariadb...';
+        sleep 2;
+      done;
+
+      echo 'Starting backup loop...';
+
+      while true; do
+        DATE=$$(date +%F_%H-%M)
+
+        echo 'Backing up PostgreSQL...';
+        pg_dump -h postgres -U $$POSTGRES_USER $$POSTGRES_DB | gzip > /backups/postgres_$$DATE.sql.gz;
+
+        echo 'Backing up MariaDB...';
+        mysqldump -h mariadb -u root -p$$MARIADB_ROOT_PASSWORD $$MARIADB_DATABASE | gzip > /backups/mariadb_$$DATE.sql.gz;
+
+        echo 'Cleaning old backups...';
+        find /backups -type f -mtime +2 -delete;
+
+        echo 'Fixing permissions...';
+        chown -R $$UID:$$GID /backups;
+
+        echo 'Backup completed at $$DATE';
+        sleep 600;
+      done
+      "
+
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+  mariadb_data:

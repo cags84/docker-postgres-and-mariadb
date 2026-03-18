@@ -42,8 +42,6 @@ phpmyadmin:
 
 Ahora procedemos a crear un archivo .env y lo llenamos con los datos correspondiente, recuerda que existe un ejemplo en el archivo .env.example
 
-El dato PMA_HOST, se trata del nombre que le damos al contenedor de mariadb en el archivo docker-compose.yml, que para este caso es mariadb, si lo cambia en ese archivo debe cambiarlo en el archivo env.
-
 El parametro [POSTGRES_TZ, MARIADB_TZ, PMA_TZ], debe ser completado dependiendo de su TimeZone, en este caso America/Bogota esta en el ejemplo, porque me encuentro en Colombia.
 
 El parametro del puerto puede ser cualquier puerto libre que tenga y que quiera usar.

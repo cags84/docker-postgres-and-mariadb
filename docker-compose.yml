@@ -1,12 +1,55 @@
 name: cluster-sql
 
+# ============================================================================
+# Stack de bases de datos para DESARROLLO LOCAL
+# Probado en:
+#   - macOS    -> OrbStack (Apple Silicon / Intel)
+#   - Windows  -> Docker Desktop + backend WSL2
+#   - Linux    -> Docker Engine nativo
+#
+# Decisiones para dev:
+#   - Sin resource limits: el runtime (OrbStack/Docker Desktop) ya gestiona la VM;
+#     en Linux nativo no hay VM. Imponer límites molesta más de lo que ayuda.
+#   - Puertos atados a 127.0.0.1: solo accesibles desde tu máquina.
+#   - Backup como profile opcional: levantarlo solo cuando se necesite.
+#   - Todas las imágenes son multi-arch (amd64 + arm64v8 / Apple Silicon).
+#
+# Bonus en OrbStack: cada servicio queda accesible vía
+#   <servicio>.cluster-sql.orb.local (con HTTPS automático para los web).
+# ============================================================================
+
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+# Nota: 'security_opt: no-new-privileges' se aplica individualmente — NO al
+# servicio pgadmin4. Su entrypoint usa sudo internamente y ese flag lo rompe
+# (el "desktop user" no se crea y la UI responde 401 Unauthorized).
+
+x-healthcheck-defaults: &healthcheck-defaults
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 30s
+
 services:
+  # ==========================================================================
+  # PostgreSQL 17 — base relacional principal (FastAPI, Laravel, etc.)
+  # ==========================================================================
   postgres:
+    <<: *common
     image: postgres:17-trixie
     container_name: postgres
-    restart: always
+    security_opt:
+      - no-new-privileges:true
     ports:
-      - "${POSTGRES_PORT}:5432"
+      # 127.0.0.1 evita que el puerto quede expuesto en la red local/WiFi.
+      # Si conectas desde otra máquina de tu LAN, cámbialo a "${POSTGRES_PORT}:5432".
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASS}
@@ -14,25 +57,77 @@ services:
       TZ: ${POSTGRES_TZ}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - db_network
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
 
-  pdAdmin4:
-    image: dpage/pgadmin4
-    container_name: pgadmin4
-    restart: always
-    depends_on:
-      - postgres
+  # ==========================================================================
+  # PostgreSQL + pgvector — alineado a PG17 (antes estaba mezclado con PG16)
+  # ==========================================================================
+  postgres-vector:
+    <<: *common
+    image: pgvector/pgvector:pg17-trixie
+    container_name: postgres-vector
+    security_opt:
+      - no-new-privileges:true
     ports:
-      - "${PGADMIN_PORT}:80"
+      - "127.0.0.1:${POSTGRES_VECTOR_PORT:-5433}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASS}
+      POSTGRES_DB: ${POSTGRES_VECTOR_DB}
+      TZ: ${POSTGRES_TZ}
+    volumes:
+      - pg_vector_data:/var/lib/postgresql/data
+    networks:
+      - db_network
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
+
+  # ==========================================================================
+  # pgAdmin 4 — corrige typo (pdAdmin4 -> pgadmin4)
+  # ==========================================================================
+  pgadmin4:
+    <<: *common
+    image: dpage/pgadmin4:9
+    container_name: pgadmin4
+    labels:
+      # Le dice al reverse proxy de OrbStack a qué puerto del container apuntar.
+      # Sin esto, cuando hay varios servicios HTTP en el mismo compose,
+      # OrbStack a veces enruta los dominios .orb.local al container equivocado.
+      dev.orbstack.http-port: "80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-vector:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${PGADMIN_PORT}:80"
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+      # Modo desktop (uso individual): no exige master password en cada inicio
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+      TZ: ${POSTGRES_TZ}
     volumes:
       - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - db_network
 
+  # ==========================================================================
+  # MariaDB — para tus proyectos Laravel
+  # La imagen oficial es multi-arch (amd64, arm64v8); funciona nativa en Apple Silicon.
+  # ==========================================================================
   mariadb:
+    <<: *common
     image: mariadb:lts-ubi9
     container_name: mariadb
-    restart: always
+    security_opt:
+      - no-new-privileges:true
     environment:
       MARIADB_USER: ${MARIADB_USER}
       MARIADB_PASSWORD: ${MARIADB_PASSWORD}
@@ -40,82 +135,118 @@ services:
       MARIADB_DATABASE: ${MARIADB_DATABASE}
       TZ: ${MARIADB_TZ}
     ports:
-      - "${MARIADB_PORT}:3306"
+      - "127.0.0.1:${MARIADB_PORT}:3306"
     volumes:
       - mariadb_data:/var/lib/mysql
+    networks:
+      - db_network
+    healthcheck:
+      <<: *healthcheck-defaults
+      # healthcheck.sh viene incluido en las imágenes oficiales modernas
+      test: [ "CMD", "healthcheck.sh", "--connect", "--innodb_initialized" ]
 
+  # ==========================================================================
+  # phpMyAdmin
+  # La imagen oficial 'phpmyadmin' ya es multi-arch — no necesitas el tag arm64v8.
+  # ==========================================================================
   phpmyadmin:
-    #image: arm64v8/phpmyadmin:latest # Para MacOS
-    image: phpmyadmin # Para Windows o Linux
-    restart: always
+    <<: *common
+    image: phpmyadmin:5
+    container_name: phpmyadmin
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      dev.orbstack.http-port: "80"
+    depends_on:
+      mariadb:
+        condition: service_healthy
     ports:
-      - "${PMA_PORT}:80" # Access phpMyAdmin via http://localhost:8082
+      - "127.0.0.1:${PMA_PORT}:80"
     environment:
-      PMA_HOST: mariadb # Tells phpMyAdmin to connect to the 'db' service (container name)
-      MYSQL_ROOT_PASSWORD: ${PMA_ROOT_PASSWORD} # Use the same root password as the 'db' service
-      PMA_ARBITRARY: 1 # Allows connecting to other hosts via the login page if needed
+      PMA_HOST: mariadb
+      MYSQL_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      # 1 = en la pantalla de login puedes conectarte a cualquier host MySQL/MariaDB.
+      # Útil en dev; ponlo en 0 si quieres restringir solo al MariaDB del compose.
+      PMA_ARBITRARY: 1
+      UPLOAD_LIMIT: 256M
+      # Silencia el warning AH00558 de Apache (no afecta funcionalidad)
+      APACHE_SERVER_NAME: phpmyadmin.local
       TZ: ${PMA_TZ}
-    depends_on:
-      - mariadb # Ensures the 'db' container starts first
+    networks:
+      - db_network
 
+  # ==========================================================================
+  # Backup OPCIONAL — solo se levanta con: docker compose --profile backup up -d
+  # Para desarrollo normal no es necesario; actívalo si vas a hacer trabajo
+  # de varios días sin querer perder los datos.
+  # ==========================================================================
   backup:
-    image: alpine:latest
+    <<: *common
+    image: postgres:17-alpine # incluye pg_dump de PG17, sin instalar nada
     container_name: db-backup
-    restart: always
+    security_opt:
+      - no-new-privileges:true
+    profiles: [ "backup" ] # <-- clave: no arranca por defecto
     depends_on:
-      - postgres
-      - mariadb
+      postgres:
+        condition: service_healthy
+      postgres-vector:
+        condition: service_healthy
+      mariadb:
+        condition: service_healthy
     volumes:
       - ./backups:/backups
     environment:
+      # UID/GID solo aplica realmente en Linux nativo.
+      # En Docker Desktop (macOS/Windows) la VM hace su propia traducción
+      # y los archivos aparecerán con tu usuario del host automáticamente.
       UID: ${UID:-1000}
       GID: ${GID:-1000}
       PGPASSWORD: ${POSTGRES_PASS}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_VECTOR_DB: ${POSTGRES_VECTOR_DB}
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
       MARIADB_DATABASE: ${MARIADB_DATABASE}
+      BACKUP_INTERVAL: ${BACKUP_INTERVAL:-86400} # 24h
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+      TZ: ${POSTGRES_TZ}
+    networks:
+      - db_network
     entrypoint: >
-      sh -c "
-      apk update &&
-      apk add --no-cache postgresql-client mariadb-client netcat-openbsd tzdata &&
+      sh -c " apk add --no-cache mariadb-client tzdata >/dev/null && echo '==> Backup service listo (intervalo='$$BACKUP_INTERVAL's, retención='$$BACKUP_RETENTION_DAYS'd)'; while true; do
+        DATE=$$(date +%F_%H-%M-%S);
 
-      echo 'Waiting for databases...';
+        echo \"[$$DATE] PostgreSQL ($$POSTGRES_DB)...\";
+        pg_dump -h postgres -U $$POSTGRES_USER -d $$POSTGRES_DB --clean --if-exists \
+          | gzip > /backups/postgres_$${POSTGRES_DB}_$$DATE.sql.gz;
 
-      until pg_isready -h postgres -U $$POSTGRES_USER; do
-        echo 'Waiting for postgres...';
-        sleep 2;
-      done;
+        echo \"[$$DATE] PostgreSQL vector ($$POSTGRES_VECTOR_DB)...\";
+        pg_dump -h postgres-vector -U $$POSTGRES_USER -d $$POSTGRES_VECTOR_DB --clean --if-exists \
+          | gzip > /backups/pgvector_$${POSTGRES_VECTOR_DB}_$$DATE.sql.gz;
 
-      until nc -z mariadb 3306; do
-        echo 'Waiting for mariadb...';
-        sleep 2;
-      done;
+        echo \"[$$DATE] MariaDB ($$MARIADB_DATABASE)...\";
+        mariadb-dump -h mariadb -u root -p$$MARIADB_ROOT_PASSWORD \
+          --single-transaction --routines --triggers --events \
+          $$MARIADB_DATABASE | gzip > /backups/mariadb_$${MARIADB_DATABASE}_$$DATE.sql.gz;
 
-      echo 'Starting backup loop...';
+        echo \"[$$DATE] Limpiando backups con más de $$BACKUP_RETENTION_DAYS días...\";
+        find /backups -type f -name '*.sql.gz' -mtime +$$BACKUP_RETENTION_DAYS -delete;
 
-      while true; do
-        DATE=$$(date +%F_%H-%M)
+        # chown solo es útil en Linux nativo; en Mac/Windows falla silenciosamente.
+        chown -R $$UID:$$GID /backups 2>/dev/null || true;
 
-        echo 'Backing up PostgreSQL...';
-        pg_dump -h postgres -U $$POSTGRES_USER $$POSTGRES_DB | gzip > /backups/postgres_$$DATE.sql.gz;
+        echo \"[$$DATE] OK. Durmiendo $$BACKUP_INTERVAL segundos...\";
+        sleep $$BACKUP_INTERVAL;
+      done "
 
-        echo 'Backing up MariaDB...';
-        mysqldump -h mariadb -u root -p$$MARIADB_ROOT_PASSWORD $$MARIADB_DATABASE | gzip > /backups/mariadb_$$DATE.sql.gz;
-
-        echo 'Cleaning old backups...';
-        find /backups -type f -mtime +2 -delete;
-
-        echo 'Fixing permissions...';
-        chown -R $$UID:$$GID /backups;
-
-        echo 'Backup completed at $$DATE';
-        sleep 600;
-      done
-      "
-
-
+# ============================================================================
 volumes:
   postgres_data:
+  pg_vector_data:
   pgadmin_data:
   mariadb_data:
+
+networks:
+  db_network:
+    driver: bridge

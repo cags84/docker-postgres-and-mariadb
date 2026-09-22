@@ -15,10 +15,14 @@ Incluye **PostgreSQL 17**, **PostgreSQL 17 + pgvector**, **MariaDB LTS**, **pgAd
 ## Inicio rápido (igual en los 3 entornos)
 
 ```bash
-cp .env.example .env       # ajusta las contraseñas
+cp .env.example .env       # ajusta usuarios, contraseñas y nombres de las bases
 docker compose up -d       # levanta el stack (sin el backup)
 docker compose ps          # verifica que todo esté "healthy"
 ```
+
+> `.env.example` trae **todas** las variables que el compose necesita. Si borras alguna,
+> `docker compose up` avisa con `variable is not set` y el servicio afectado arranca mal
+> (por ejemplo, sin `POSTGRES_VECTOR_DB` la base vectorial se crea con el nombre del usuario).
 
 Para incluir backups automáticos:
 
@@ -43,14 +47,15 @@ docker compose down -v
 ## Servicios y puertos
 
 Todos los puertos quedan atados a `127.0.0.1` (solo accesibles desde tu máquina, no desde la WiFi).
+Los puertos y los nombres de las bases salen de tu `.env`; abajo se muestran los valores por defecto.
 
-| Servicio          | URL / Conexión                        |
-| ----------------- | ------------------------------------- |
-| PostgreSQL        | `localhost:5432` (db: `app_db`)       |
-| PostgreSQL vector | `localhost:5433` (db: `vector_db`)    |
-| MariaDB           | `localhost:3306` (db: `laravel_db`)   |
-| pgAdmin 4         | http://localhost:8081                 |
-| phpMyAdmin        | http://localhost:8082                 |
+| Servicio          | URL / Conexión   | Puerto en `.env`        | Base de datos en `.env` |
+| ----------------- | ---------------- | ----------------------- | ----------------------- |
+| PostgreSQL        | `localhost:5432` | `POSTGRES_PORT`         | `POSTGRES_DB`           |
+| PostgreSQL vector | `localhost:5433` | `POSTGRES_VECTOR_PORT`  | `POSTGRES_VECTOR_DB`    |
+| MariaDB           | `localhost:3306` | `MARIADB_PORT`          | `MARIADB_DATABASE`      |
+| pgAdmin 4         | http://localhost:8081 | `PGADMIN_PORT`     | —                       |
+| phpMyAdmin        | http://localhost:8082 | `PMA_PORT`         | —                       |
 
 ### Bonus si usas OrbStack
 
@@ -72,23 +77,27 @@ OrbStack genera un dominio automático para cada servicio del compose, con HTTPS
 
 ### FastAPI corriendo en el host
 
-```python
-# Postgres principal
-DATABASE_URL = "postgresql+asyncpg://postgres:changeme_strong_password@localhost:5432/app_db"
+Sustituye los valores por los que pusiste en tu `.env`:
 
-# Postgres con pgvector
-VECTOR_DATABASE_URL = "postgresql+asyncpg://postgres:changeme_strong_password@localhost:5433/vector_db"
+```python
+# Postgres principal   -> POSTGRES_USER : POSTGRES_PASS @ POSTGRES_PORT / POSTGRES_DB
+DATABASE_URL = "postgresql+asyncpg://mi_usuario:mi_password@localhost:5432/mi_base"
+
+# Postgres con pgvector -> POSTGRES_USER : POSTGRES_PASS @ POSTGRES_VECTOR_PORT / POSTGRES_VECTOR_DB
+VECTOR_DATABASE_URL = "postgresql+asyncpg://mi_usuario:mi_password@localhost:5433/mi_base_vector"
 ```
+
+> Los dos Postgres comparten `POSTGRES_USER` y `POSTGRES_PASS`; solo cambian la base y el puerto.
 
 ### Laravel corriendo en el host — `.env` del proyecto Laravel
 
 ```env
 DB_CONNECTION=mariadb
 DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_DATABASE=laravel_db
-DB_USERNAME=laravel
-DB_PASSWORD=changeme_user_password
+DB_PORT=3306          # MARIADB_PORT
+DB_DATABASE=mi_base   # MARIADB_DATABASE
+DB_USERNAME=mi_usuario   # MARIADB_USER
+DB_PASSWORD=mi_password  # MARIADB_PASSWORD
 ```
 
 ### Si tu app también corre en Docker
@@ -109,19 +118,77 @@ networks:
 Dentro del container la URL queda así:
 
 ```python
-DATABASE_URL = "postgresql+asyncpg://postgres:changeme_strong_password@postgres:5432/app_db"
+# Ojo: dentro de la red se usa el puerto interno 5432, no POSTGRES_PORT.
+DATABASE_URL = "postgresql+asyncpg://mi_usuario:mi_password@postgres:5432/mi_base"
 ```
 
 ---
 
 ## Habilitar la extensión `vector` (primera vez)
 
+Usa el usuario y la base que definiste como `POSTGRES_USER` y `POSTGRES_VECTOR_DB`:
+
 ```bash
 docker exec -it postgres-vector \
-  psql -U postgres -d vector_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
+  psql -U mi_usuario -d mi_base_vector -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
 ---
+
+## Backups
+
+El servicio `backup` es **opcional** y solo arranca con su perfil:
+
+```bash
+docker compose --profile backup up -d
+docker compose logs -f backup      # ver cada ciclo
+```
+
+La lógica está en [`backup.sh`](backup.sh) (se monta dentro del container, así que
+puedes editarlo y aplicar con `docker compose restart backup`). Cada
+`BACKUP_INTERVAL` segundos vuelca las tres bases a `./backups/`:
+
+```
+backups/postgres_<POSTGRES_DB>_2026-09-22_03-00-00.sql.gz
+backups/pgvector_<POSTGRES_VECTOR_DB>_2026-09-22_03-00-00.sql.gz
+backups/mariadb_<MARIADB_DATABASE>_2026-09-22_03-00-00.sql.gz
+```
+
+| Variable de `.env`      | Por defecto | Qué hace |
+| ----------------------- | ----------- | -------- |
+| `BACKUP_INTERVAL`       | `86400`     | Segundos entre ciclos (86400 = 24 h) |
+| `BACKUP_RETENTION_DAYS` | `7`         | Borra los `.sql.gz` más antiguos que esto |
+| `UID` / `GID`           | `1000`      | Dueño de los archivos generados (solo Linux nativo) |
+
+**Un dump que falla no deja archivo.** El volcado se escribe primero como
+`.sql.gz.part` y solo se renombra si el comando terminó bien, para que un fallo
+(contraseña mala, base inexistente) no se disfrace de backup válido ni desplace a
+los buenos cuando corre la rotación. Si algo falla, el ciclo lo registra como
+`ERROR` y termina con `Ciclo TERMINADO CON ERRORES`.
+
+**Alcance:** se respalda **una base por servidor** — las que indican `POSTGRES_DB`,
+`POSTGRES_VECTOR_DB` y `MARIADB_DATABASE`. No incluye otras bases que hayas creado
+a mano ni los roles globales de PostgreSQL (eso sería `pg_dumpall --globals-only`).
+
+### Backup manual a demanda
+
+Sin necesidad de levantar el servicio:
+
+```bash
+docker exec postgres pg_dump -U mi_usuario mi_base | gzip > backup_$(date +%F).sql.gz
+```
+
+### Restaurar
+
+```bash
+# PostgreSQL (los dumps se generan con --clean --if-exists: reemplazan lo que haya)
+gunzip -c backups/postgres_mi_base_2026-09-22_03-00-00.sql.gz \
+  | docker exec -i postgres psql -U mi_usuario -d mi_base
+
+# MariaDB
+gunzip -c backups/mariadb_mi_base_2026-09-22_03-00-00.sql.gz \
+  | docker exec -i mariadb mariadb -u root -p mi_base
+```
 
 ## Notas por plataforma
 
@@ -214,14 +281,8 @@ docker compose logs -f postgres
 docker compose restart mariadb
 
 # Entrar a un container
-docker exec -it postgres psql -U postgres -d app_db
+docker exec -it postgres psql -U mi_usuario -d mi_base
 docker exec -it mariadb mariadb -u root -p
-
-# Backup manual a demanda (sin levantar el contenedor backup)
-docker exec postgres pg_dump -U postgres app_db | gzip > backup_$(date +%F).sql.gz
-
-# Restaurar un backup
-gunzip -c backup_2026-04-26.sql.gz | docker exec -i postgres psql -U postgres -d app_db
 
 # Ver estado de salud de todos los servicios
 docker compose ps
@@ -230,6 +291,12 @@ docker compose ps
 ---
 
 ## Troubleshooting
+
+**`variable is not set. Defaulting to a blank string`**
+A tu `.env` le falta una variable que el compose usa. Compáralo con `.env.example`.
+El caso más silencioso es `POSTGRES_VECTOR_DB`: sin él, la base vectorial se crea con
+el nombre del usuario en vez del que esperas. Si el servicio `backup` detecta variables
+vacías se detiene y las lista en su log en vez de generar dumps equivocados.
 
 **"port is already allocated"**
 Ya tienes algo escuchando en ese puerto. Cambia el puerto en `.env` (`POSTGRES_PORT`, `MARIADB_PORT`, etc.) o detén el otro proceso.

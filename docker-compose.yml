@@ -117,6 +117,12 @@ services:
       - pgadmin_data:/var/lib/pgadmin
     networks:
       - db_network
+    healthcheck:
+      <<: *healthcheck-defaults
+      # La imagen no trae curl; wget sí. /misc/ping responde sin autenticación.
+      test: [ "CMD-SHELL", "wget -q -O /dev/null http://localhost:80/misc/ping" ]
+      # pgAdmin tarda en inicializar su base interna en el primer arranque.
+      start_period: 60s
 
   # ==========================================================================
   # MariaDB — para tus proyectos Laravel
@@ -174,15 +180,19 @@ services:
       TZ: ${PMA_TZ}
     networks:
       - db_network
+    healthcheck:
+      <<: *healthcheck-defaults
+      test: [ "CMD-SHELL", "curl -fsS -o /dev/null http://localhost:80/" ]
 
   # ==========================================================================
   # Backup OPCIONAL — solo se levanta con: docker compose --profile backup up -d
   # Para desarrollo normal no es necesario; actívalo si vas a hacer trabajo
   # de varios días sin querer perder los datos.
+  # La lógica vive en ./backup.sh (montado); los dumps quedan en ./backups/.
   # ==========================================================================
   backup:
     <<: *common
-    image: postgres:17-alpine # incluye pg_dump de PG17, sin instalar nada
+    image: postgres:17-alpine # trae pg_dump de PG17; el cliente de MariaDB lo instala backup.sh
     container_name: db-backup
     security_opt:
       - no-new-privileges:true
@@ -196,6 +206,9 @@ services:
         condition: service_healthy
     volumes:
       - ./backups:/backups
+      # Montado de solo lectura: editas backup.sh en el host y basta con
+      # 'docker compose restart backup' para aplicarlo.
+      - ./backup.sh:/usr/local/bin/backup.sh:ro
     environment:
       # UID/GID solo aplica realmente en Linux nativo.
       # En Docker Desktop (macOS/Windows) la VM hace su propia traducción
@@ -213,32 +226,7 @@ services:
       TZ: ${POSTGRES_TZ}
     networks:
       - db_network
-    entrypoint: >
-      sh -c " apk add --no-cache mariadb-client tzdata >/dev/null && echo '==> Backup service listo (intervalo='$$BACKUP_INTERVAL's, retención='$$BACKUP_RETENTION_DAYS'd)'; while true; do
-        DATE=$$(date +%F_%H-%M-%S);
-
-        echo \"[$$DATE] PostgreSQL ($$POSTGRES_DB)...\";
-        pg_dump -h postgres -U $$POSTGRES_USER -d $$POSTGRES_DB --clean --if-exists \
-          | gzip > /backups/postgres_$${POSTGRES_DB}_$$DATE.sql.gz;
-
-        echo \"[$$DATE] PostgreSQL vector ($$POSTGRES_VECTOR_DB)...\";
-        pg_dump -h postgres-vector -U $$POSTGRES_USER -d $$POSTGRES_VECTOR_DB --clean --if-exists \
-          | gzip > /backups/pgvector_$${POSTGRES_VECTOR_DB}_$$DATE.sql.gz;
-
-        echo \"[$$DATE] MariaDB ($$MARIADB_DATABASE)...\";
-        mariadb-dump -h mariadb -u root -p$$MARIADB_ROOT_PASSWORD \
-          --single-transaction --routines --triggers --events \
-          $$MARIADB_DATABASE | gzip > /backups/mariadb_$${MARIADB_DATABASE}_$$DATE.sql.gz;
-
-        echo \"[$$DATE] Limpiando backups con más de $$BACKUP_RETENTION_DAYS días...\";
-        find /backups -type f -name '*.sql.gz' -mtime +$$BACKUP_RETENTION_DAYS -delete;
-
-        # chown solo es útil en Linux nativo; en Mac/Windows falla silenciosamente.
-        chown -R $$UID:$$GID /backups 2>/dev/null || true;
-
-        echo \"[$$DATE] OK. Durmiendo $$BACKUP_INTERVAL segundos...\";
-        sleep $$BACKUP_INTERVAL;
-      done "
+    entrypoint: [ "sh", "/usr/local/bin/backup.sh" ]
 
 # ============================================================================
 volumes:

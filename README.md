@@ -147,6 +147,28 @@ docker exec -it postgres-vector \
 
 ---
 
+## Zona horaria
+
+Una sola variable para todo el stack:
+
+```bash
+# .env
+TZ=America/Bogota
+```
+
+Afecta a los logs de las cinco bases y UIs, y a la hora que llevan los nombres de
+los archivos de backup. Si no la defines, todo corre en `UTC`.
+
+Si algún servicio necesita una zona distinta, tiene su propio override, que gana
+sobre `TZ`: `POSTGRES_TZ` (aplica a los dos Postgres), `MARIADB_TZ`, `PMA_TZ`,
+`PGADMIN_TZ` y `BACKUP_TZ`. Rara vez hace falta.
+
+> **Si vienes de una versión anterior del stack**, tu `.env` tendrá `POSTGRES_TZ`,
+> `MARIADB_TZ` y `PMA_TZ` pero no `TZ`. Esos tres siguen funcionando, pero pgAdmin y
+> el servicio de backup colgaban de `POSTGRES_TZ` y ahora no: pasarán a `UTC` hasta
+> que añadas `TZ=...` a tu `.env`. Se nota sobre todo en la hora de los nombres de
+> los backups. Añadir la línea `TZ` lo resuelve, y puedes borrar las otras tres.
+
 ## Acceso remoto (LAN o VPN)
 
 Si Docker corre en otra máquina —un servidor de la LAN, o uno accesible por VPN—
@@ -360,6 +382,10 @@ docker compose ps
 ---
 
 ## Troubleshooting
+
+**Las horas salen en UTC y yo esperaba mi zona**
+Define `TZ` en tu `.env` (ver [Zona horaria](#zona-horaria)). Pasa al actualizar desde
+una versión anterior, donde la zona se definía con tres variables separadas.
 
 **No puedo conectar desde otra máquina**
 Revisa `BIND_ADDRESS` en tu `.env` (por defecto es `127.0.0.1`, que solo acepta conexiones

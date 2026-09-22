@@ -46,7 +46,8 @@ docker compose down -v
 
 ## Servicios y puertos
 
-Todos los puertos quedan atados a `127.0.0.1` (solo accesibles desde tu máquina, no desde la WiFi).
+Por defecto todos los puertos quedan atados a `127.0.0.1` (solo accesibles desde tu máquina, no
+desde la WiFi). Para llegar desde otro equipo, mira [Acceso remoto](#acceso-remoto-lan-o-vpn).
 Los puertos y los nombres de las bases salen de tu `.env`; abajo se muestran los valores por defecto.
 
 | Servicio          | URL / Conexión   | Puerto en `.env`        | Base de datos en `.env` |
@@ -134,6 +135,63 @@ docker exec -it postgres-vector \
 ```
 
 ---
+
+## Acceso remoto (LAN o VPN)
+
+Si Docker corre en otra máquina —un servidor de la LAN, o uno accesible por VPN—
+necesitas que los puertos escuchen fuera de `localhost`. Lo controla una sola
+variable, `BIND_ADDRESS`:
+
+| Valor | Escucha en | Cuándo |
+| ----- | ---------- | ------ |
+| `127.0.0.1` | solo esa máquina | Desarrollo local. **Por defecto.** |
+| `0.0.0.0` | todas las interfaces | LAN de confianza. Expone a todo lo que alcance el host. |
+| `10.x.x.x`, `100.x.x.x`… | solo esa interfaz | **La mejor opción con VPN**: usa la IP que te da la VPN. |
+
+```bash
+# .env
+BIND_ADDRESS=0.0.0.0
+```
+
+```bash
+docker compose up -d           # recrea los containers con el nuevo bind
+ss -ltn | grep 5432            # comprueba: debe decir 0.0.0.0, no 127.0.0.1
+```
+
+Desde el otro equipo se conecta igual, cambiando `localhost` por la IP del servidor:
+
+```python
+DATABASE_URL = "postgresql+asyncpg://mi_usuario:mi_password@192.168.1.50:5432/mi_base"
+```
+
+### Al exponer, cambia también estas dos
+
+En local son comodidades; con el puerto abierto son agujeros reales.
+
+| Variable | Local | Remoto | Por qué |
+| -------- | ----- | ------ | ------- |
+| `PGADMIN_SERVER_MODE` | `False` | **`True`** | En `False` pgAdmin usa *"an automatic default login"*: entra **sin pedir contraseña**, con tus conexiones ya guardadas. Su propia documentación avisa: *"DO NOT DISABLE SERVER MODE IF RUNNING ON A WEBSERVER!!"*. En `True` exige `PGADMIN_DEFAULT_EMAIL` + `PGADMIN_DEFAULT_PASSWORD`. |
+| `PMA_ARBITRARY` | `1` | **`0`** | En `1` la pantalla de login de phpMyAdmin acepta **cualquier host** MySQL/MariaDB, así que sirve de trampolín hacia otras bases alcanzables desde el container. En `0` solo habla con el MariaDB del compose. |
+
+Y ahora las contraseñas del `.env` sí importan: en local casi daba igual lo que
+pusieras porque nada salía de tu máquina.
+
+### El firewall del host no te protege
+
+Esto sorprende a mucha gente. Un `ufw deny 5432` **no cierra** un puerto publicado por
+Docker. La documentación de Docker lo dice sin rodeos:
+
+> *"When you publish a container's ports using Docker, traffic to and from that
+> container gets diverted before it goes through the ufw firewall settings."*
+
+El motivo es que Docker enruta en la tabla `nat`, y los paquetes se desvían antes de
+llegar a las cadenas `INPUT`/`OUTPUT` que usa ufw. Con `firewalld` no es exactamente un
+bypass, pero Docker crea una zona `docker` con target `ACCEPT`, con el mismo efecto
+práctico.
+
+**Consecuencia:** no publiques en `0.0.0.0` confiando en cerrarlo luego con el firewall.
+Ata `BIND_ADDRESS` a la IP de la VPN, que es la interfaz por la que de verdad quieres
+recibir tráfico.
 
 ## Backups
 
@@ -291,6 +349,12 @@ docker compose ps
 ---
 
 ## Troubleshooting
+
+**No puedo conectar desde otra máquina**
+Revisa `BIND_ADDRESS` en tu `.env` (por defecto es `127.0.0.1`, que solo acepta conexiones
+locales) y recrea con `docker compose up -d`. Comprueba con `ss -ltn | grep <puerto>`: si
+muestra `127.0.0.1` en vez de `0.0.0.0` o la IP esperada, el cambio no se aplicó. Ver
+[Acceso remoto](#acceso-remoto-lan-o-vpn) — y ojo, el firewall del host no interviene aquí.
 
 **`variable is not set. Defaulting to a blank string`**
 A tu `.env` le falta una variable que el compose usa. Compáralo con `.env.example`.

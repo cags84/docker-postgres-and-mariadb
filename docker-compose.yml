@@ -1,13 +1,16 @@
 name: cluster-sql
 
 # ============================================================================
-# Stack de bases de datos para DESARROLLO LOCAL
+# Stack de bases de datos para DESARROLLO
+# Local por defecto; con BIND_ADDRESS también sirve a otras máquinas
+# (servidor de la LAN, o acceso por VPN). Ver README -> "Acceso remoto".
+#
 # Probado en:
 #   - macOS    -> OrbStack (Apple Silicon / Intel)
 #   - Windows  -> Docker Desktop + backend WSL2
 #   - Linux    -> Docker Engine nativo
 #
-# Decisiones para dev:
+# Decisiones de diseño:
 #   - Sin resource limits: el runtime (OrbStack/Docker Desktop) ya gestiona la VM;
 #     en Linux nativo no hay VM. Imponer límites molesta más de lo que ayuda.
 #   - Alcance de los puertos controlado por BIND_ADDRESS (ver .env):

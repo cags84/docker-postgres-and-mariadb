@@ -1,6 +1,10 @@
-# cluster-sql — stack de DBs para desarrollo local
+# cluster-sql — stack de bases de datos para desarrollo
 
-Stack listo para correr en tres entornos:
+Pensado para desarrollo local, pero también para dejarlo corriendo en un servidor
+de la LAN o en una máquina remota accesible por VPN: el alcance de los puertos se
+decide con una variable, sin tocar el compose (ver [Acceso remoto](#acceso-remoto-lan-o-vpn)).
+
+Listo para correr en tres entornos:
 
 | Plataforma | Runtime recomendado |
 | ---------- | ------------------- |
@@ -8,7 +12,11 @@ Stack listo para correr en tres entornos:
 | Windows    | **Docker Desktop** con backend **WSL2** |
 | Linux      | **Docker Engine** nativo (`docker-ce`) |
 
-Incluye **PostgreSQL 17**, **PostgreSQL 17 + pgvector**, **MariaDB LTS**, **pgAdmin 4** y **phpMyAdmin**.
+Incluye **PostgreSQL 17**, **PostgreSQL 17 + pgvector**, **MariaDB LTS**, **pgAdmin 4**
+y **phpMyAdmin**, más un servicio opcional de **backups automáticos**
+([`backup.sh`](backup.sh)) que se activa con su propio perfil.
+
+El repo es deliberadamente pequeño: `docker-compose.yml`, `backup.sh`, `.env.example` y este README.
 
 ---
 
@@ -24,11 +32,14 @@ docker compose ps          # verifica que todo esté "healthy"
 > `docker compose up` avisa con `variable is not set` y el servicio afectado arranca mal
 > (por ejemplo, sin `POSTGRES_VECTOR_DB` la base vectorial se crea con el nombre del usuario).
 
-Para incluir backups automáticos:
+Para incluir backups automáticos (ver [Backups](#backups)):
 
 ```bash
 docker compose --profile backup up -d
 ```
+
+Para que el stack sea accesible desde otro equipo, define `BIND_ADDRESS` en tu `.env`
+antes de levantarlo (ver [Acceso remoto](#acceso-remoto-lan-o-vpn)).
 
 Detener todo (manteniendo los datos):
 

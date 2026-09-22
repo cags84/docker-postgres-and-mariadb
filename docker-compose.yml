@@ -10,7 +10,9 @@ name: cluster-sql
 # Decisiones para dev:
 #   - Sin resource limits: el runtime (OrbStack/Docker Desktop) ya gestiona la VM;
 #     en Linux nativo no hay VM. Imponer límites molesta más de lo que ayuda.
-#   - Puertos atados a 127.0.0.1: solo accesibles desde tu máquina.
+#   - Alcance de los puertos controlado por BIND_ADDRESS (ver .env):
+#     127.0.0.1 = solo esta máquina (por defecto) | 0.0.0.0 = LAN/internet
+#     | <IP> = solo esa interfaz (p. ej. la de tu VPN).
 #   - Backup como profile opcional: levantarlo solo cuando se necesite.
 #   - Todas las imágenes son multi-arch (amd64 + arm64v8 / Apple Silicon).
 #
@@ -47,9 +49,9 @@ services:
     security_opt:
       - no-new-privileges:true
     ports:
-      # 127.0.0.1 evita que el puerto quede expuesto en la red local/WiFi.
-      # Si conectas desde otra máquina de tu LAN, cámbialo a "${POSTGRES_PORT}:5432".
-      - "127.0.0.1:${POSTGRES_PORT}:5432"
+      # El default 127.0.0.1 mantiene el puerto fuera de la red local/WiFi.
+      # Para llegar desde otra máquina, define BIND_ADDRESS en tu .env.
+      - "${BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT}:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASS}
@@ -73,7 +75,7 @@ services:
     security_opt:
       - no-new-privileges:true
     ports:
-      - "127.0.0.1:${POSTGRES_VECTOR_PORT:-5433}:5432"
+      - "${BIND_ADDRESS:-127.0.0.1}:${POSTGRES_VECTOR_PORT:-5433}:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASS}
@@ -105,12 +107,16 @@ services:
       postgres-vector:
         condition: service_healthy
     ports:
-      - "127.0.0.1:${PGADMIN_PORT}:80"
+      - "${BIND_ADDRESS:-127.0.0.1}:${PGADMIN_PORT}:80"
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
-      # Modo desktop (uso individual): no exige master password en cada inicio
-      PGADMIN_CONFIG_SERVER_MODE: "False"
+      # False = desktop mode: login automático, cómodo para uso local individual.
+      # True  = server mode: exige PGADMIN_DEFAULT_EMAIL + PASSWORD.
+      # La documentación de pgAdmin avisa: "DO NOT DISABLE SERVER MODE IF RUNNING
+      # ON A WEBSERVER!!" — si expones el puerto, pon PGADMIN_SERVER_MODE=True.
+      PGADMIN_CONFIG_SERVER_MODE: "${PGADMIN_SERVER_MODE:-False}"
+      # Solo aplica en desktop mode; en server mode se ignora.
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
       TZ: ${POSTGRES_TZ}
     volumes:
@@ -141,7 +147,7 @@ services:
       MARIADB_DATABASE: ${MARIADB_DATABASE}
       TZ: ${MARIADB_TZ}
     ports:
-      - "127.0.0.1:${MARIADB_PORT}:3306"
+      - "${BIND_ADDRESS:-127.0.0.1}:${MARIADB_PORT}:3306"
     volumes:
       - mariadb_data:/var/lib/mysql
     networks:
@@ -167,13 +173,14 @@ services:
       mariadb:
         condition: service_healthy
     ports:
-      - "127.0.0.1:${PMA_PORT}:80"
+      - "${BIND_ADDRESS:-127.0.0.1}:${PMA_PORT}:80"
     environment:
       PMA_HOST: mariadb
       MYSQL_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
       # 1 = en la pantalla de login puedes conectarte a cualquier host MySQL/MariaDB.
-      # Útil en dev; ponlo en 0 si quieres restringir solo al MariaDB del compose.
-      PMA_ARBITRARY: 1
+      # Cómodo en local, pero expuesto convierte esta UI en un trampolín hacia
+      # cualquier base alcanzable desde el container: pon PMA_ARBITRARY=0 en remoto.
+      PMA_ARBITRARY: "${PMA_ARBITRARY:-1}"
       UPLOAD_LIMIT: 256M
       # Silencia el warning AH00558 de Apache (no afecta funcionalidad)
       APACHE_SERVER_NAME: phpmyadmin.local

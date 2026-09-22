@@ -35,6 +35,10 @@ x-common: &common
 # servicio pgadmin4. Su entrypoint usa sudo internamente y ese flag lo rompe
 # (el "desktop user" no se crea y la UI responde 401 Unauthorized).
 
+# Zona horaria: cada servicio acepta su propio override (POSTGRES_TZ,
+# MARIADB_TZ, PMA_TZ, PGADMIN_TZ, BACKUP_TZ); si falta, usa el TZ global
+# del .env; si tampoco, UTC. Normalmente basta con definir TZ una vez.
+
 x-healthcheck-defaults: &healthcheck-defaults
   interval: 10s
   timeout: 5s
@@ -59,7 +63,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASS}
       POSTGRES_DB: ${POSTGRES_DB}
-      TZ: ${POSTGRES_TZ}
+      TZ: ${POSTGRES_TZ:-${TZ:-UTC}}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -83,7 +87,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASS}
       POSTGRES_DB: ${POSTGRES_VECTOR_DB}
-      TZ: ${POSTGRES_TZ}
+      TZ: ${POSTGRES_TZ:-${TZ:-UTC}}
     volumes:
       - pg_vector_data:/var/lib/postgresql/data
     networks:
@@ -121,7 +125,7 @@ services:
       PGADMIN_CONFIG_SERVER_MODE: "${PGADMIN_SERVER_MODE:-False}"
       # Solo aplica en desktop mode; en server mode se ignora.
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
-      TZ: ${POSTGRES_TZ}
+      TZ: ${PGADMIN_TZ:-${TZ:-UTC}}
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     networks:
@@ -148,7 +152,7 @@ services:
       MARIADB_PASSWORD: ${MARIADB_PASSWORD}
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
       MARIADB_DATABASE: ${MARIADB_DATABASE}
-      TZ: ${MARIADB_TZ}
+      TZ: ${MARIADB_TZ:-${TZ:-UTC}}
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${MARIADB_PORT}:3306"
     volumes:
@@ -187,7 +191,7 @@ services:
       UPLOAD_LIMIT: 256M
       # Silencia el warning AH00558 de Apache (no afecta funcionalidad)
       APACHE_SERVER_NAME: phpmyadmin.local
-      TZ: ${PMA_TZ}
+      TZ: ${PMA_TZ:-${TZ:-UTC}}
     networks:
       - db_network
     healthcheck:
@@ -233,7 +237,7 @@ services:
       MARIADB_DATABASE: ${MARIADB_DATABASE}
       BACKUP_INTERVAL: ${BACKUP_INTERVAL:-86400} # 24h
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
-      TZ: ${POSTGRES_TZ}
+      TZ: ${BACKUP_TZ:-${TZ:-UTC}}
     networks:
       - db_network
     entrypoint: [ "sh", "/usr/local/bin/backup.sh" ]

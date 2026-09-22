@@ -413,3 +413,10 @@ Asegúrate de que el proyecto está en el filesystem WSL2, no en `C:\`. Ver secc
 
 **En macOS los puertos no responden después de `compose up`**
 Espera unos segundos al primer arranque (sobre todo de pgAdmin, que tarda en inicializar). Verifica `docker compose ps` que estén `healthy`.
+
+---
+
+## Licencia
+
+[MIT](LICENSE) © 2026 Carlos Guzman. Úsalo, cópialo y modifícalo libremente;
+lo único que se pide es conservar el aviso de copyright. Sin garantía de ningún tipo.

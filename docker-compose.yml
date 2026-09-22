@@ -70,7 +70,10 @@ services:
       - db_network
     healthcheck:
       <<: *healthcheck-defaults
-      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
+      # -h 127.0.0.1 fuerza TCP: en el primer arranque el entrypoint levanta un
+      # servidor temporal solo por socket mientras crea la base; sin -h, pg_isready
+      # lo daría por listo y los dependientes arrancarían antes del reinicio final.
+      test: [ "CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
 
   # ==========================================================================
   # PostgreSQL + pgvector — alineado a PG17 (antes estaba mezclado con PG16)
@@ -94,7 +97,10 @@ services:
       - db_network
     healthcheck:
       <<: *healthcheck-defaults
-      test: [ "CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
+      # -h 127.0.0.1 fuerza TCP: en el primer arranque el entrypoint levanta un
+      # servidor temporal solo por socket mientras crea la base; sin -h, pg_isready
+      # lo daría por listo y los dependientes arrancarían antes del reinicio final.
+      test: [ "CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}" ]
 
   # ==========================================================================
   # pgAdmin 4 — corrige typo (pdAdmin4 -> pgadmin4)
@@ -183,7 +189,6 @@ services:
       - "${BIND_ADDRESS:-127.0.0.1}:${PMA_PORT}:80"
     environment:
       PMA_HOST: mariadb
-      MYSQL_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
       # 1 = en la pantalla de login puedes conectarte a cualquier host MySQL/MariaDB.
       # Cómodo en local, pero expuesto convierte esta UI en un trampolín hacia
       # cualquier base alcanzable desde el container: pon PMA_ARBITRARY=0 en remoto.

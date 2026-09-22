@@ -276,9 +276,10 @@ docker exec postgres pg_dump -U mi_usuario mi_base | gzip > backup_$(date +%F).s
 gunzip -c backups/postgres_mi_base_2026-09-22_03-00-00.sql.gz \
   | docker exec -i postgres psql -U mi_usuario -d mi_base
 
-# MariaDB
+# MariaDB (la contraseña sale de la variable del container: un -p interactivo
+# aquí leería la primera línea del dump como contraseña, porque stdin es el dump)
 gunzip -c backups/mariadb_mi_base_2026-09-22_03-00-00.sql.gz \
-  | docker exec -i mariadb mariadb -u root -p mi_base
+  | docker exec -i mariadb sh -c 'exec mariadb -u root -p"$MARIADB_ROOT_PASSWORD" mi_base'
 ```
 
 ## Notas por plataforma

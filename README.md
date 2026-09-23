@@ -83,6 +83,24 @@ OrbStack genera un dominio automático para cada servicio del compose, con HTTPS
 
 > El TLD es `.orb.local`. Los certificados HTTPS los genera OrbStack y se confían automáticamente en macOS — no aparece la advertencia del navegador.
 
+### Entrar a pgAdmin y phpMyAdmin
+
+**pgAdmin 4.** Con `PGADMIN_SERVER_MODE=False` (el valor local) entra sin pedir login.
+Con `True` pide `PGADMIN_DEFAULT_EMAIL` y `PGADMIN_DEFAULT_PASSWORD`. Los servidores se
+registran a mano la primera vez (*Register → Server*), usando los nombres de servicio
+porque pgAdmin corre dentro de la red del compose:
+
+| Servidor          | Host              | Puerto | Usuario / contraseña              |
+| ----------------- | ----------------- | ------ | --------------------------------- |
+| PostgreSQL        | `postgres`        | `5432` | `POSTGRES_USER` / `POSTGRES_PASS` |
+| PostgreSQL vector | `postgres-vector` | `5432` | `POSTGRES_USER` / `POSTGRES_PASS` |
+
+> El puerto es siempre el interno `5432`, no `POSTGRES_PORT` ni `POSTGRES_VECTOR_PORT`.
+
+**phpMyAdmin.** Pide usuario y contraseña de MariaDB en su pantalla de login: tu
+`MARIADB_USER` / `MARIADB_PASSWORD`, o `root` / `MARIADB_ROOT_PASSWORD`. Ninguna contraseña
+se le pasa por el compose. Si aparece el campo *Servidor* (`PMA_ARBITRARY=1`), escribe `mariadb`.
+
 ---
 
 ## Conectar desde tu app
@@ -378,6 +396,10 @@ docker exec -it mariadb mariadb -u root -p
 
 # Ver estado de salud de todos los servicios
 docker compose ps
+
+# Aplicar una versión nueva del stack (tras git pull): recrea solo los
+# servicios cuya configuración cambió; los datos de los volúmenes se conservan
+git pull && docker compose up -d
 ```
 
 ---
@@ -405,6 +427,11 @@ Ya tienes algo escuchando en ese puerto. Cambia el puerto en `.env` (`POSTGRES_P
 
 **El healthcheck nunca pasa a "healthy"**
 Mira los logs: `docker compose logs <servicio>`. Causa más común: contraseña incorrecta o conflicto del volumen con datos previos. Limpia con `docker compose down -v` (¡borra los datos!).
+
+**pgAdmin se reinicia en bucle: `'...' does not appear to be a valid email address`**
+`PGADMIN_DEFAULT_EMAIL` debe tener formato de email real (`admin@example.com` sirve). pgAdmin lo
+valida en su primer arranque, al crear su base interna, aunque estés en modo local sin login.
+Corrígelo en `.env` y ejecuta `docker compose up -d`.
 
 **pgAdmin da 401 Unauthorized al entrar**
 Si ves en los logs `sudo: The "no new privileges" flag is set` y `The desktop user ... was not found in the configuration database`: el entrypoint de pgAdmin necesita `sudo` para crear su "desktop user", y el flag `no-new-privileges` lo bloquea. En este compose pgAdmin ya está configurado **sin** ese flag por esa razón. Si modificaste el archivo y agregaste `security_opt: no-new-privileges:true` al servicio `pgadmin4`, quítalo. Reinicia con `docker compose down -v && docker compose up -d` (¡borra los datos!) o limpia solo el volumen de pgAdmin: `docker volume rm cluster-sql_pgadmin_data`.

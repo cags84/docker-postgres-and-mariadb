@@ -20,6 +20,7 @@ Lee primero `README.md` para conocer el uso y alcance actual. Es un monorepo fun
 | `apps/web/vite.config.ts` | Proxy de desarrollo a la API |
 | `packages/contracts/src/index.ts` | Tipos, esquemas Zod, servicios permitidos y recursos afectados por acciones |
 | `backup.sh`, `docker/backup/Dockerfile` | Ciclos, retención, metadatos e imagen con clientes SQL y flock |
+| `docs/assets/` | Recursos visuales locales del README |
 | `apps/api/test/server.test.ts` | Pruebas de API |
 | `apps/web/src/App.test.tsx` | Pruebas de componentes |
 | `tests/backup_test.py` | Pruebas del script con comandos simulados |

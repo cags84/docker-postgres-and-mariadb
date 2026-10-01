@@ -1,60 +1,92 @@
-# cluster-sql
+<a id="cluster-sql"></a>
+<h1 align="center">cluster-sql</h1>
+
+![Observa, administra y respalda tus bases de datos locales](docs/assets/readme-banner.svg)
+
+<p align="center">
+  <strong>Guía técnica · Dashboard y stack SQL para desarrollo local</strong><br>
+  Docker Compose · Node.js 24 · pnpm 12.8.1 · React · Fastify
+</p>
 
 Monorepo para administrar un stack local de PostgreSQL, PostgreSQL con pgvector y MariaDB. Incluye pgAdmin, phpMyAdmin, backups y un dashboard web. El dashboard se ejecuta en el host y controla Docker mediante su CLI.
 
-## Estado actual
+**Ir a:** [Inicio rápido](#inicio-rápido) · [Servicios](#servicios-y-conexiones) · [Backups](#backups) · [Configuración](#configuración-del-dashboard) · [Diagnóstico](#diagnóstico) · [Mapa del proyecto](#mapa-del-repositorio)
 
-- Dashboard con estado, salud, detalle del healthcheck y puertos publicados de los seis servicios del proyecto.
-- Logs en vivo, con pausa y reconexión; cada conexión empieza con las últimas 200 líneas y la pantalla conserva hasta 5.000.
-- Acciones para iniciar, detener y reiniciar servicios, con resultado visible en la actividad reciente.
-- Acceso a pgAdmin y phpMyAdmin mediante enlaces con los puertos reales.
-- Listado y descarga de dumps, backup manual y estado persistente del último ciclo automático.
-- Bloqueo compartido entre backups y acciones del dashboard que afectan sus bases o dependencias.
+---
 
-El alcance es desarrollo local. No incluye autenticación, acceso remoto al dashboard, métricas de CPU/RAM, restauración o eliminación desde la UI, ni administración de otros proyectos Docker. La actividad de las acciones vive en memoria y se pierde al reiniciar la API; el resultado del backup automático permanece en disco.
+## Qué puedes hacer
+
+| Área | Funcionalidad disponible |
+| --- | --- |
+| **Observación** | Estado, salud, detalle del healthcheck y puertos publicados de los seis servicios. |
+| **Logs** | Streaming con pausa y reconexión; últimas 200 líneas al conectar y hasta 5.000 en pantalla. |
+| **Operaciones** | Iniciar, detener y reiniciar servicios; resultado en la actividad reciente. |
+| **Gestión SQL** | Enlaces a pgAdmin y phpMyAdmin con los puertos reales. |
+| **Backups** | Listado, descarga, ejecución manual y estado persistente del último ciclo automático. |
+| **Coordinación** | Bloqueo compartido entre backups y acciones que afectan bases o dependencias. |
+
+> [!NOTE]
+> **Alcance local.** No incluye autenticación, acceso remoto al dashboard, métricas de CPU/RAM, restauración o eliminación desde la UI, ni administración de otros proyectos Docker.
+
+La actividad de las acciones vive en memoria y se pierde al reiniciar la API; el resultado del backup automático permanece en disco.
 
 ## Requisitos
 
-- Docker activo y Docker Compose v2 disponibles en la terminal.
-- Node.js 24 (ver [.nvmrc](.nvmrc)) y pnpm 12.8.1 (ver [package.json](package.json)).
-- Python 3 para ejecutar las pruebas de backups y la integración con Docker.
+| Herramienta | Versión / condición | Para qué se usa |
+| --- | --- | --- |
+| Docker + Compose | Docker activo y Compose v2 en la terminal | Ejecutar y administrar el stack |
+| Node.js | 24 · [.nvmrc](.nvmrc) | Ejecutar el dashboard |
+| pnpm | 12.8.1 · [package.json](package.json) | Instalar y compilar el monorepo |
+| Python | 3 | Pruebas de backups e integración Docker |
 
 Ejecuta los comandos desde la raíz del repositorio. En Windows, usa un entorno WSL2 con acceso a Docker y ejecuta también Node/pnpm allí.
 
-## Inicio
+## Inicio rápido
 
-1. Si aún no existe `.env`, copia la plantilla:
+### 1. Prepara la configuración
 
-   ```sh
-   cp .env.example .env
-   ```
+Si aún no existe `.env`, copia la plantilla:
 
-   Edita usuarios, contraseñas, nombres de las tres bases y el correo de pgAdmin. No sobrescribas un `.env` existente. Las credenciales de la plantilla son ejemplos.
+```sh
+cp .env.example .env
+```
 
-2. Valida y levanta las bases y sus herramientas:
+Edita usuarios, contraseñas, nombres de las tres bases y el correo de pgAdmin.
 
-   ```sh
-   docker compose config --quiet
-   docker compose up -d --wait
-   ```
+> [!IMPORTANT]
+> Conserva tu `.env` si ya existe. Las credenciales de la plantilla son ejemplos y debes reemplazarlas.
 
-3. Instala las dependencias e inicia el dashboard:
+### 2. Levanta el stack
 
-   ```sh
-   pnpm install --frozen-lockfile
-   pnpm dev
-   ```
+```sh
+docker compose config --quiet
+docker compose up -d --wait
+```
 
-Abre [http://127.0.0.1:5173](http://127.0.0.1:5173). Vite sirve la web en 5173 y redirige `/api` a la API en 3000. El dashboard también muestra los servicios que todavía no se han creado; iniciarlos requiere un `.env` válido.
+Esto inicia las tres bases y sus herramientas de gestión. Los backups periódicos se activan por separado en [Backups](#backups).
 
-Para servir la aplicación compilada sin Vite:
+### 3. Abre el dashboard
+
+```sh
+pnpm install --frozen-lockfile
+pnpm dev
+```
+
+**Abre [127.0.0.1:5173](http://127.0.0.1:5173).** Vite sirve la web en 5173 y redirige `/api` a la API en 3000. El dashboard también muestra los servicios que todavía no se han creado; iniciarlos requiere un `.env` válido.
+
+### Ejecutar la aplicación compilada
 
 ```sh
 pnpm build
 pnpm start
 ```
 
-Abre [http://127.0.0.1:3000](http://127.0.0.1:3000). El servidor usa los archivos compilados de `apps/web/dist`; vuelve a compilar después de cambiar el código.
+**Abre [127.0.0.1:3000](http://127.0.0.1:3000).** El servidor usa los archivos compilados de `apps/web/dist`; vuelve a compilar después de cambiar el código.
+
+| Modo | Comando | URL de la web |
+| --- | --- | --- |
+| Desarrollo con Vite | `pnpm dev` | [127.0.0.1:5173](http://127.0.0.1:5173) |
+| Aplicación compilada | `pnpm build` y luego `pnpm start` | [127.0.0.1:3000](http://127.0.0.1:3000) |
 
 ## Servicios y conexiones
 
@@ -69,7 +101,11 @@ Los puertos siguientes son los valores de `.env.example`; puedes modificarlos en
 | `phpmyadmin` | `phpmyadmin:5` | [localhost:8082](http://127.0.0.1:8082) | `phpmyadmin:80` |
 | `backup` | `cluster-sql-backup:pg17` (construida localmente) | Carpeta `backups/` | Sin puerto publicado |
 
+### Conectar las herramientas
+
 En pgAdmin registra los servidores como `postgres:5432` y `postgres-vector:5432`, usando `POSTGRES_USER` y `POSTGRES_PASS`. Ambas instancias comparten esas credenciales, pero tienen bases y volúmenes separados. phpMyAdmin apunta a `mariadb`; ingresa con un usuario de MariaDB.
+
+### Habilitar pgvector
 
 La imagen pgvector incluye la extensión, pero debes habilitarla en cada base donde la necesites:
 
@@ -77,9 +113,13 @@ La imagen pgvector incluye la extensión, pero debes habilitarla en cada base do
 docker compose exec postgres-vector sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE EXTENSION IF NOT EXISTS vector;"'
 ```
 
+### Persistencia de datos
+
 Los datos persisten en los volúmenes `postgres_data`, `pg_vector_data`, `mariadb_data` y `pgadmin_data` del proyecto Compose `cluster-sql`. Cambiar las credenciales o nombres de bases en `.env` no modifica las bases ya inicializadas: realiza esos cambios con SQL y actualiza la configuración correspondiente.
 
 ## Backups
+
+### Automáticos
 
 Para activar el servicio periódico:
 
@@ -89,6 +129,8 @@ docker compose --profile backup up -d --build backup
 
 El primer ciclo empieza al arrancar. `BACKUP_INTERVAL` define la espera entre ciclos (86.400 segundos por defecto) y `BACKUP_RETENTION_DAYS` la retención (7 por defecto). En Linux, ajusta `UID` y `GID` al propietario deseado de los archivos.
 
+### Manuales
+
 El botón de backup manual requiere las tres bases en ejecución y saludables. No necesita mantener activo el servicio periódico. Su equivalente por terminal es:
 
 ```sh
@@ -96,13 +138,19 @@ docker compose build backup
 docker compose --profile backup run --rm --no-deps -T backup --once
 ```
 
+### Qué se guarda y cómo se protege
+
 Cada ciclo genera tres dumps SQL comprimidos en `backups/`: uno de `POSTGRES_DB`, uno de `POSTGRES_VECTOR_DB` y uno de `MARIADB_DATABASE`. No respalda otras bases, roles globales de PostgreSQL ni la configuración de pgAdmin. El backup de cada base es independiente; el ciclo no es una instantánea sincronizada de las tres.
 
 Los archivos se escriben como `.sql.gz.part` y se publican como `.sql.gz` solo cuando el dump termina correctamente. La rotación usa `find -mtime +BACKUP_RETENTION_DAYS` y solo se ejecuta si los tres dumps tuvieron éxito; los fallos conservan las copias anteriores.
 
 `backups/.backup.lock` impide ciclos simultáneos. Las acciones del dashboard que afectan bases o sus dependencias usan el mismo bloqueo mediante un contenedor temporal. Los comandos Docker ejecutados directamente fuera del dashboard no pasan por esa protección.
 
+### Estado del último ciclo
+
 El script guarda el último estado en `.backup-status-automatic.json` y `.backup-status-manual.json`. El dashboard muestra el automático: en curso, completado, fallido o interrumpido. Si todavía no existe, muestra que no hay un ciclo registrado. Las fechas del estado se guardan en UTC; los nombres de los dumps usan la zona horaria del servicio. No se guarda un historial de ciclos.
+
+### Restauración y mantenimiento
 
 La restauración se realiza por CLI o por las herramientas de gestión. Selecciona el archivo, la instancia y la base de destino, y valida la recuperación antes de depender de una copia. La prueba de integración incluye una restauración real de las tres bases y de datos vectoriales.
 
@@ -116,7 +164,8 @@ docker compose --profile backup up -d --build backup
 
 ## Configuración del dashboard
 
-Estas variables se pasan al proceso Node mediante su entorno; no se cargan automáticamente desde `.env`. Ese archivo configura Compose.
+> [!TIP]
+> **Dos configuraciones distintas:** `.env` configura Compose. Las variables `DASHBOARD_*` se pasan al entorno del proceso Node; no se cargan automáticamente desde `.env`.
 
 | Variable | Valor predeterminado | Uso |
 | --- | --- | --- |
@@ -138,6 +187,8 @@ Para cambiar el puerto, usa la aplicación compilada, por ejemplo `DASHBOARD_POR
 
 El dashboard sigue ligado a `127.0.0.1`, sin autenticación y con validación de Host/Origin local. `BIND_ADDRESS` no cambia su dirección de escucha. No está preparado para publicarse en la red.
 
+### Zona horaria
+
 `TZ` configura la zona horaria del stack; `POSTGRES_TZ`, `MARIADB_TZ`, `PMA_TZ`, `PGADMIN_TZ` y `BACKUP_TZ` permiten overrides por servicio.
 
 ## Desarrollo y validación
@@ -154,17 +205,38 @@ La integración crea un proyecto temporal, puertos de bases asignados por Docker
 
 ## Diagnóstico
 
-- **Variables ausentes:** revisa `.env` y ejecuta `docker compose config --quiet`.
-- **Docker no responde o faltan servicios:** comprueba `docker info`, `docker context show` y `docker compose ps -a`; reinicia la API después de cambiar de contexto.
-- **Servicio no saludable:** consulta su detalle en el dashboard o `docker compose logs --tail 100 NOMBRE_SERVICIO`.
-- **Puerto ocupado:** cambia el puerto del servicio en `.env` y recréalo con `docker compose up -d NOMBRE_SERVICIO`.
-- **Acción bloqueada:** espera a que termine el backup o la operación dependiente y revisa su resultado en actividad reciente.
-- **Credenciales nuevas no funcionan:** el volumen conserva las credenciales anteriores; cambiar `.env` no las reemplaza.
+| Síntoma | Qué revisar |
+| --- | --- |
+| **Variables ausentes** | Revisa `.env` y ejecuta `docker compose config --quiet`. |
+| **Docker no responde o faltan servicios** | Comprueba `docker info`, `docker context show` y `docker compose ps -a`; reinicia la API después de cambiar de contexto. |
+| **Servicio no saludable** | Consulta su detalle en el dashboard o ejecuta `docker compose logs --tail 100 NOMBRE_SERVICIO`. |
+| **Puerto ocupado** | Cambia el puerto del servicio en `.env` y recréalo con `docker compose up -d NOMBRE_SERVICIO`. |
+| **Acción bloqueada** | Espera a que termine el backup o la operación dependiente y revisa su resultado en actividad reciente. |
+| **Credenciales nuevas no funcionan** | El volumen conserva las credenciales anteriores; cambiar `.env` no las reemplaza. |
 
-`docker compose down` elimina contenedores y red, conservando los volúmenes. Añadir `-v` elimina los datos persistentes; no lo uses como solución rutinaria a errores.
+> [!WARNING]
+> `docker compose down` conserva los volúmenes. Añadir `-v` elimina los datos persistentes; no lo uses como solución rutinaria a errores.
 
 ## Mapa del repositorio
 
-Consulta [AGENTS.md](AGENTS.md) para orientarte al trabajar con agentes o LLMs. La implementación se divide entre `apps/web`, `apps/api` y `packages/contracts`; la infraestructura vive en `docker-compose.yml`, `backup.sh` y `docker/backup/`.
+```text
+.
+├── apps/
+│   ├── api/             # Fastify · Docker CLI · logs y backups
+│   └── web/             # React · dashboard y estilos
+├── packages/
+│   └── contracts/       # Tipos, esquemas y recursos de operaciones
+├── docker/backup/       # Imagen con clientes SQL y flock
+├── tests/               # Pruebas del script e integración Docker
+├── docs/assets/         # Recursos visuales de esta guía
+├── docker-compose.yml  # Servicios, red y volúmenes
+├── backup.sh           # Ciclos, retención y estado de backups
+├── .env.example        # Plantilla de configuración Compose
+└── AGENTS.md           # Orientación para agentes y LLMs
+```
 
-Licencia [MIT](LICENSE).
+**Trabajar con un LLM:** empieza por [AGENTS.md](AGENTS.md). Describe dónde está cada responsabilidad, qué verificar y qué límites conservar al modificar el proyecto.
+
+---
+
+[Volver al inicio](#cluster-sql) · Licencia [MIT](LICENSE)

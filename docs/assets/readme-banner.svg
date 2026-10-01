@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="240" viewBox="0 0 1040 240" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">cluster-sql — observa, administra y respalda</title>
+  <desc id="desc">Banner azul oscuro con acentos turquesa y tres bases de datos conectadas a un panel local.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1040" y2="240" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#163345"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" stroke="#94A3B8" stroke-opacity=".07"/>
+    </pattern>
+  </defs>
+  <rect width="1040" height="240" rx="20" fill="url(#background)"/>
+  <rect width="1040" height="240" rx="20" fill="url(#grid)"/>
+  <rect x="40" y="40" width="4" height="160" rx="2" fill="#2DD4BF"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
+    <text x="66" y="64" fill="#5EEAD4" font-size="12" font-weight="700" letter-spacing="2">LOCAL DATABASE WORKSPACE</text>
+    <text x="64" y="111" fill="#F8FAFC" font-size="34" font-weight="700">Observa. Administra. Respalda.</text>
+    <text x="66" y="146" fill="#CBD5E1" font-size="17">PostgreSQL · pgvector · MariaDB</text>
+    <rect x="66" y="170" width="160" height="28" rx="14" fill="#2DD4BF" fill-opacity=".12" stroke="#2DD4BF" stroke-opacity=".25"/>
+    <circle cx="82" cy="184" r="4" fill="#5EEAD4"/>
+    <text x="94" y="189" fill="#99F6E4" font-size="12" font-weight="600">Desarrollo local</text>
+  </g>
+  <g stroke="#5EEAD4" stroke-width="2">
+    <path d="M760 120H816M816 67V173M816 67H854M816 120H854M816 173H854" stroke-opacity=".45"/>
+    <rect x="684" y="81" width="76" height="78" rx="10" fill="#0F172A"/>
+    <path d="M684 104H760" stroke-opacity=".35"/>
+    <path d="M699 118H713V143H699ZM722 130H745V143H722" fill="#2DD4BF" fill-opacity=".15"/>
+    <circle cx="699" cy="93" r="2" fill="#5EEAD4" stroke="none"/>
+    <circle cx="707" cy="93" r="2" fill="#5EEAD4" stroke="none" opacity=".5"/>
+    <g fill="#153447">
+      <path d="M854 55V79C854 85 878 90 902 90S950 85 950 79V55"/>
+      <ellipse cx="902" cy="55" rx="48" ry="11"/>
+      <path d="M854 108V132C854 138 878 143 902 143S950 138 950 132V108"/>
+      <ellipse cx="902" cy="108" rx="48" ry="11"/>
+      <path d="M854 161V185C854 191 878 196 902 196S950 191 950 185V161"/>
+      <ellipse cx="902" cy="161" rx="48" ry="11"/>
+    </g>
+  </g>
+</svg>

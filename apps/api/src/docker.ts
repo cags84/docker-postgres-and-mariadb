@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { serviceNames, type ServiceName, type Service, type Action } from '@cluster-sql/contracts';
+import { serviceNames, type ServiceName, type Service, type Action, needsBackupLock } from '@cluster-sql/contracts';
 export class AppError extends Error {
     constructor(message: string, public statusCode = 503) { super(message); }
 }
@@ -121,11 +121,49 @@ export class Docker implements DockerAccess {
         }
         return result;
     }
+    private async withBackupLock(work: () => Promise<string>): Promise<string> {
+        // Un contenedor pequeño mantiene flock mientras la CLI del host actúa.
+        // Funciona en macOS/Windows sin instalar flock en el host.
+        const script = 'exec 9>/backups/.backup.lock; flock -n -E 75 9 || exit 75; printf "__cluster_sql_guard_ready__\\n"; cat >/dev/null';
+        const child = spawn('docker', [...await this.compose(), 'run', '--rm', '--no-deps', '-T',
+            '--entrypoint', 'sh', 'backup', '-c', script], {cwd: this.root, stdio: ['pipe', 'pipe', 'pipe']});
+        let ended = false;
+        let stderr = '';
+        child.stdin.on('error', () => { /* El contenedor puede rechazar el bloqueo antes de leer stdin. */ });
+        const closed = new Promise<void>(resolve => child.once('close', () => {ended = true; resolve();}));
+        child.stderr.on('data', (data: Buffer) => {stderr = (stderr + data.toString()).slice(-8000);});
+        try {
+            await new Promise<void>((resolve, reject) => {
+                let output = '';
+                const timer = setTimeout(() => reject(new AppError('No se pudo preparar el bloqueo de backup a tiempo.', 504)), 300000);
+                const finish = (error?: Error) => {clearTimeout(timer); if (error) reject(error); else resolve();};
+                child.stdout.on('data', (data: Buffer) => {
+                    output = (output + data.toString()).slice(-1000);
+                    if (output.includes('__cluster_sql_guard_ready__')) finish();
+                });
+                child.once('error', () => finish(new AppError('No se puede ejecutar Docker.')));
+                child.once('close', code => finish(new AppError(code === 75
+                    ? 'Hay un backup u otra acción protegida en curso. Espera a que termine.'
+                    : stderr.trim() || 'No se pudo adquirir el bloqueo de backup.', code === 75 ? 409 : 503)));
+            });
+            const result = await work();
+            if (ended) throw new AppError('Se perdió el bloqueo durante la acción. Comprueba el estado de Docker.');
+            return result;
+        } finally {
+            child.stdin.end();
+            // Antes de READY puede estar construyendo la imagen; se cancela si no lee stdin.
+            const timeout = setTimeout(() => child.kill('SIGTERM'), 10000);
+            await closed;
+            clearTimeout(timeout);
+        }
+    }
     async action(service: ServiceName, action: Action): Promise<string> {
-        if (action === 'start')
-            return this.run([...await this.compose(), 'up', '-d', service], 300000);
-        const container = await this.container(service);
-        return this.run([...await this.base(), action, container.Id], 60000);
+        const work = async () => {
+            if (action === 'start') return this.run([...await this.compose(), 'up', '-d', service], 300000);
+            const container = await this.container(service);
+            return this.run([...await this.base(), action, container.Id], 60000);
+        };
+        return needsBackupLock(service, action) ? this.withBackupLock(work) : work();
     }
     async backup(): Promise<string> {
         const services = await this.services();

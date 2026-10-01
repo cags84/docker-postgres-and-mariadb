@@ -1,7 +1,7 @@
 import { constants } from 'node:fs';
 import { open, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Backup } from '@cluster-sql/contracts';
+import { backupCycleSchema, type Backup, type BackupStatus } from '@cluster-sql/contracts';
 import { AppError } from './docker.js';
 export class BackupFiles {
     constructor(private directory: string) { }
@@ -46,6 +46,22 @@ export class BackupFiles {
             catch { /* Un archivo puede desaparecer durante la rotación. */ }
         }
         return files.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt));
+    }
+    async status(): Promise<BackupStatus> {
+        let handle;
+        try {
+            handle = await open(join(this.directory, '.backup-status-automatic.json'), constants.O_RDONLY | constants.O_NOFOLLOW);
+            const stat = await handle.stat();
+            if (!stat.isFile() || stat.size > 4096) throw new Error('Archivo inválido.');
+            const parsed = backupCycleSchema.safeParse(JSON.parse(await handle.readFile('utf8')));
+            if (!parsed.success) throw new Error('Formato inválido.');
+            return {automatic: parsed.data, error: null};
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {automatic: null, error: null};
+            return {automatic: null, error: 'No se pudo leer el estado del backup automático. Consulta los logs.'};
+        } finally {
+            await handle?.close();
+        }
     }
     async download(name: string) {
         const { handle, stat } = await this.file(name);

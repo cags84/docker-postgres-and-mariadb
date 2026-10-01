@@ -8,6 +8,7 @@ import { serviceNames } from '@cluster-sql/contracts';
 const services = serviceNames.map(name => ({ name, image: 'test:1', state: name === 'postgres' ? 'running' : 'missing', health: name === 'postgres' ? 'healthy' : 'none', healthOutput: null, ports: [], toolUrl: name === 'postgres' ? 'http://127.0.0.1:8081' : null }));
 let offline = false;
 let currentJob: object | null = null;
+let automaticStatus: object | null = null;
 class MockEvents {
     static last: MockEvents;
     onopen?: () => void;
@@ -25,6 +26,7 @@ class MockEvents {
 beforeEach(() => {
     offline = false;
     currentJob = null;
+    automaticStatus = null;
     vi.stubGlobal('EventSource', MockEvents);
     Element.prototype.scrollIntoView = vi.fn();
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
@@ -32,7 +34,7 @@ beforeEach(() => {
             return { ok: false, json: async () => ({ error: 'Docker apagado' }) };
         if (init)
             currentJob = { id: 'job', status: 'running', target: 'postgres', action: 'restart', startedAt: new Date().toISOString(), finishedAt: null, output: '' };
-        const value = init ? currentJob : url.endsWith('/services') ? { context: 'orbstack', project: 'cluster-sql', services, updatedAt: new Date().toISOString() } : url.endsWith('/operations') && currentJob ? [currentJob] : [];
+        const value = url.endsWith('/backups/status') ? {automatic: automaticStatus, error: null} : init ? currentJob : url.endsWith('/services') ? { context: 'orbstack', project: 'cluster-sql', services, updatedAt: new Date().toISOString() } : url.endsWith('/operations') && currentJob ? [currentJob] : [];
         return { ok: true, json: async () => value };
     }));
 });
@@ -86,4 +88,18 @@ test('vista de backups muestra estado vacío', async () => {
     await screen.findByText('PostgreSQL');
     fireEvent.click(screen.getByRole('button', { name: /Backups 0/ }));
     expect(screen.getByText('Todavía no hay backups')).toBeVisible();
+});
+
+test('muestra fallos automáticos y bloquea las acciones que afectan las bases durante un ciclo', async () => {
+    automaticStatus = {status: 'running', startedAt: '2026-10-01T12:00:00Z', finishedAt: null};
+    render(<App/>);
+    await screen.findByText('PostgreSQL');
+    expect(screen.getByLabelText('Estado del backup automático')).toHaveTextContent('En curso');
+    expect(screen.getByRole('button', {name: 'Iniciar pgAdmin 4'})).toBeDisabled();
+    expect(screen.getByRole('button', {name: 'Iniciar phpMyAdmin'})).toBeDisabled();
+    expect(screen.getByRole('button', {name: 'Detener PostgreSQL'})).toBeDisabled();
+    automaticStatus = {status: 'failed', startedAt: '2026-10-01T12:00:00Z', finishedAt: '2026-10-01T12:01:00Z'};
+    fireEvent.click(screen.getByRole('button', {name: 'Actualizar'}));
+    await waitFor(() => expect(screen.getByLabelText('Estado del backup automático')).toHaveTextContent('Falló'));
+    expect(screen.getByRole('button', {name: 'Iniciar pgAdmin 4'})).not.toBeDisabled();
 });

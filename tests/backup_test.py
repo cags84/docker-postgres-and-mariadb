@@ -1,6 +1,7 @@
 """Pruebas del script sin motor Docker; las dependencias se simulan."""
 from pathlib import Path
 import gzip
+import json
 import os
 import subprocess
 import tempfile
@@ -18,7 +19,7 @@ class BackupTest(unittest.TestCase):
         mocks = {
             'pg_dump': 'case "$*" in *"-h postgres-vector "*) [ "${FAIL_VECTOR:-0}" = 1 ] && exit 1 ;; esac\nprintf "SELECT 42;\\n"\n',
             'mariadb-dump': '[ "${FAIL_MARIA:-0}" = 1 ] && exit 1\nprintf "SELECT 42;\\n"\n',
-            'mv': '[ "${FAIL_MOVE:-0}" = 1 ] && exit 1\nexec /bin/mv "$@"\n',
+            'mv': 'case "$2" in *.sql.gz) [ "${FAIL_MOVE:-0}" = 1 ] && exit 1 ;; esac\nexec /bin/mv "$@"\n',
             'flock': '[ "$1" = "-u" ] && exit 0\n[ "${LOCK_BUSY:-0}" != 1 ]\n',
             'chown': 'exit 0\n',
         }
@@ -50,12 +51,17 @@ class BackupTest(unittest.TestCase):
         self.assertEqual(len(files), 3)
         for file in files:
             self.assertIn(b'42', gzip.decompress(file.read_bytes()))
+        status = json.loads((self.dest / '.backup-status-manual.json').read_text())
+        self.assertEqual(status['status'], 'succeeded')
+        self.assertIsNotNone(status['finishedAt'])
+        self.assertFalse((self.dest / '.backup-status-automatic.json').exists())
 
     def test_dump_failure_preserves_old_copy(self):
         result = self.run_backup(FAIL_VECTOR='1')
         self.assertEqual(result.returncode, 1)
         self.assertTrue(self.old.exists())
         self.assertIn('Rotación omitida', result.stdout)
+        self.assertEqual(json.loads((self.dest / '.backup-status-manual.json').read_text())['status'], 'failed')
         self.assertFalse(list(self.dest.glob('*.part')))
 
     def test_move_failure_not_success(self):
@@ -76,6 +82,23 @@ class BackupTest(unittest.TestCase):
             with self.subTest(changes=changes):
                 self.assertEqual(self.run_backup(**changes).returncode, 1)
                 self.assertTrue(self.old.exists())
+
+    def test_automatic_status_survives_manual_cycle(self):
+        process = subprocess.Popen(['/bin/sh', str(self.script)], env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        automatic = self.dest / '.backup-status-automatic.json'
+        try:
+            for _ in range(100):
+                if automatic.exists() and json.loads(automatic.read_text())['status'] == 'succeeded':
+                    break
+                time.sleep(.02)
+            else:
+                self.fail('No se registró el resultado automático')
+            recorded = automatic.read_text()
+        finally:
+            process.terminate()
+            process.wait(timeout=5)
+        self.assertEqual(self.run_backup().returncode, 0)
+        self.assertEqual(automatic.read_text(), recorded)
 
     def test_zero_retention(self):
         self.assertEqual(self.run_backup(BACKUP_RETENTION_DAYS='0').returncode, 0)

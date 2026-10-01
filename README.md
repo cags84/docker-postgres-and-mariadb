@@ -59,7 +59,12 @@ Un cierre de la aplicación no revierte operaciones ya enviadas a Docker.
 
 Los accesos a herramientas usan los puertos publicados de los contenedores, sin
 credenciales en la URL. `backup` no tiene healthcheck: estar en ejecución no certifica
-que el último respaldo haya terminado bien; consulta sus logs y los archivos.
+que el último respaldo haya terminado bien. El dashboard muestra el **último ciclo
+automático** con inicio, fin y resultado (completado, fallido o interrumpido). El
+estado se guarda en `backups/.backup-status-automatic.json` y sobrevive al reinicio
+de la API. Los ciclos manuales guardan su resultado por separado y no sobrescriben
+el automático. Si nunca se ha ejecutado el script actualizado, aparecerá «Sin ciclos
+registrados». Los logs conservan el detalle de cada error.
 
 Estructura: `apps/web` (React/Vite), `apps/api` (Fastify/Docker) y
 `packages/contracts` (tipos y validación compartida). No hay base de datos adicional.
@@ -361,8 +366,12 @@ El script devuelve `0` al completar las tres copias, `1` si falla alguna y `75` 
 otro ciclo ya está activo. El ciclo manual y el periódico comparten un bloqueo en
 `backups/.backup.lock`; el bloqueo se libera al terminar el proceso. El archivo del
 bloqueo puede permanecer en el directorio y no debe borrarse mientras haya ciclos
-activos. Un ciclo periódico que encuentre el bloqueo ocupado espera al siguiente
-intervalo. Si falla una copia, conserva las anteriores y omite la rotación.
+activos. Las acciones del dashboard que afectan bases o pueden iniciarlas como dependencias
+(compartidas por pgAdmin/phpMyAdmin) adquieren ese mismo bloqueo durante la operación.
+Si hay un ciclo activo, la acción falla sin modificar los contenedores. Un ciclo
+periódico que encuentre el bloqueo ocupado reintenta en hasta 30 segundos, para no
+saltarse un día de backups por una acción breve. Los comandos Docker ejecutados
+manualmente fuera del dashboard no pasan por esta protección. Si falla una copia, conserva las anteriores y omite la rotación.
 
 ### Backup manual a demanda
 

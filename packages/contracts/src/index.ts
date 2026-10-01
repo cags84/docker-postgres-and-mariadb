@@ -34,3 +34,26 @@ export interface Operation {
     finishedAt: string | null;
     output: string;
 }
+
+export const backupCycleSchema = z.object({
+    status: z.enum(['running', 'succeeded', 'failed', 'interrupted']),
+    startedAt: z.iso.datetime(),
+    finishedAt: z.iso.datetime().nullable(),
+}).strict();
+export type BackupCycle = z.infer<typeof backupCycleSchema>;
+export interface BackupStatus { automatic: BackupCycle | null; error: string | null }
+
+// Compose puede iniciar o recrear estas dependencias con `up`.
+const startDependencies: Partial<Record<ServiceName, ServiceName[]>> = {
+    pgadmin4: ['postgres', 'postgres-vector'],
+    phpmyadmin: ['mariadb'],
+    backup: ['postgres', 'postgres-vector', 'mariadb'],
+};
+export const databaseServices: ServiceName[] = ['postgres', 'postgres-vector', 'mariadb'];
+export function operationResources(target: ServiceName | 'backups', action: Action | 'backup'): ServiceName[] {
+    if (target === 'backups') return [...databaseServices, 'backup'];
+    return [target, ...(action === 'start' ? startDependencies[target] ?? [] : [])];
+}
+export function needsBackupLock(target: ServiceName, action: Action): boolean {
+    return operationResources(target, action).some(name => name === 'backup' || databaseServices.includes(name));
+}

@@ -134,3 +134,47 @@ test('SSE transmite líneas y termina el proceso al desconectar', async () => {
         await f.cleanup();
     }
 });
+
+test('reserva dependencias al iniciar UIs y las libera después de fallar', async () => {
+    let reject!: (reason: Error) => void;
+    const pending = new Promise<string>((_resolve, fail) => {reject = fail;});
+    const f = await fixture(fake({action: () => pending}));
+    try {
+        const first = await f.app.inject({method: 'POST', url: '/api/services/pgadmin4/actions', headers, payload: {action: 'start'}});
+        assert.equal(first.statusCode, 202);
+        for (const name of ['postgres', 'postgres-vector']) {
+            assert.equal((await f.app.inject({method: 'POST', url: `/api/services/${name}/actions`, headers, payload: {action: 'restart'}})).statusCode, 409);
+        }
+        assert.equal((await f.app.inject({method: 'POST', url: '/api/backups', headers, payload: {}})).statusCode, 409);
+        reject(new Error('No se pudo iniciar pgAdmin'));
+        await new Promise(done => setImmediate(done));
+        assert.equal((await f.app.inject({method: 'POST', url: '/api/backups', headers, payload: {}})).statusCode, 202);
+    } finally {reject(new Error('Fin de la prueba')); await f.cleanup();}
+});
+test('backup manual bloquea iniciar herramientas con dependencias, permite detener una UI', async () => {
+    let resolve!: (value: string) => void;
+    const f = await fixture(fake({backup: () => new Promise(done => {resolve = done;})}));
+    try {
+        assert.equal((await f.app.inject({method: 'POST', url: '/api/backups', headers, payload: {}})).statusCode, 202);
+        for (const name of ['pgadmin4', 'phpmyadmin', 'backup']) {
+            assert.equal((await f.app.inject({method: 'POST', url: `/api/services/${name}/actions`, headers, payload: {action: 'start'}})).statusCode, 409);
+        }
+        assert.equal((await f.app.inject({method: 'POST', url: '/api/services/pgadmin4/actions', headers, payload: {action: 'stop'}})).statusCode, 202);
+    } finally {resolve('OK'); await f.cleanup();}
+});
+test('estado automático persistido: ausencia, éxito, interrupción y formato inválido', async () => {
+    const f = await fixture();
+    try {
+        const status = () => f.app.inject({url: '/api/backups/status', headers});
+        assert.deepEqual((await status()).json(), {automatic: null, error: null});
+        const cycle = {status: 'succeeded', startedAt: '2026-10-01T12:00:00Z', finishedAt: '2026-10-01T12:01:00Z'};
+        const file = join(f.directory, '.backup-status-automatic.json');
+        await writeFile(file, JSON.stringify(cycle));
+        assert.deepEqual((await status()).json().automatic, cycle);
+        await writeFile(file, JSON.stringify({...cycle, status: 'running', finishedAt: null}));
+        assert.equal((await status()).json().automatic.status, 'interrupted');
+        await writeFile(file, 'invalid');
+        assert.ok((await status()).json().error);
+        assert.equal((await f.app.inject({url: '/api/services', headers})).statusCode, 200);
+    } finally {await f.cleanup();}
+});

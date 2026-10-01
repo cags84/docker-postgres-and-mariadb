@@ -2,7 +2,7 @@ import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { serviceSchema, actionSchema, type Operation } from '@cluster-sql/contracts';
+import { serviceSchema, actionSchema, operationResources, type Operation } from '@cluster-sql/contracts';
 import { AppError, type DockerAccess } from './docker.js';
 import { BackupFiles } from './backups.js';
 export interface Settings {
@@ -38,9 +38,10 @@ export function buildServer(docker: DockerAccess, settings: Settings) {
         return parsed.data;
     };
     function launch(target: Operation['target'], action: Operation['action'], work: () => Promise<string>) {
-        if (busy.has(target))
-            throw new AppError('Ya existe una operación en curso para este destino.', 409);
-        busy.add(target);
+        const resources = operationResources(target, action);
+        if (resources.some(name => busy.has(name)))
+            throw new AppError('Ya existe una operación que afecta este servicio o sus dependencias.', 409);
+        for (const name of resources) busy.add(name);
         // Solo se eliminan operaciones finalizadas; nunca se pierde una activa.
         if (operations.size >= 100) {
             const oldest = [...operations.values()].find(o => o.status !== 'running');
@@ -55,7 +56,7 @@ export function buildServer(docker: DockerAccess, settings: Settings) {
         }).catch(error => {
             operation.status = 'failed';
             operation.output = error instanceof Error ? error.message : 'La operación falló.';
-        }).finally(() => { operation.finishedAt = new Date().toISOString(); busy.delete(target); });
+        }).finally(() => { operation.finishedAt = new Date().toISOString(); for (const name of resources) busy.delete(name); });
         return operation;
     }
     app.get('/api/services', async () => {
@@ -72,11 +73,19 @@ export function buildServer(docker: DockerAccess, settings: Settings) {
         const parsed = actionSchema.safeParse(request.body);
         if (!parsed.success)
             throw new AppError('Acción inválida.', 400);
-        if (busy.has('backups') && ['postgres', 'postgres-vector', 'mariadb', 'backup'].includes(name))
-            throw new AppError('Espera a que termine el backup manual.', 409);
         return reply.code(202).send(launch(name, parsed.data.action, () => docker.action(name, parsed.data.action)));
     });
     app.get('/api/backups', async () => backups.list());
+    app.get('/api/backups/status', async () => {
+        const status = await backups.status();
+        if (status.automatic?.status === 'running') {
+            const services = await docker.services();
+            if (services.find(s => s.name === 'backup')?.state !== 'running') {
+                status.automatic = {...status.automatic, status: 'interrupted'};
+            }
+        }
+        return status;
+    });
     app.post('/api/backups', async (_request, reply) => {
         if (['postgres', 'postgres-vector', 'mariadb', 'backup'].some(name => busy.has(name)))
             throw new AppError('Espera a que terminen las operaciones sobre las bases.', 409);

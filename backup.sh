@@ -71,6 +71,29 @@ done
 # flock libera el bloqueo automáticamente, incluso si el proceso se interrumpe.
 exec 9>"$BACKUP_DIR/.backup.lock" || exit 1
 
+mode=automatic
+[ "$once" -eq 0 ] || mode=manual
+status_file="$BACKUP_DIR/.backup-status-${mode}.json"
+cycle_active=0
+started_at=""
+finished_at=""
+write_status() {
+  # Solo fechas y estados controlados; nunca se escriben credenciales.
+  status_partial="${status_file}.$$.part"
+  printf '{"status":"%s","startedAt":"%s","finishedAt":%s}\n' \
+    "$1" "$started_at" "${finished_at:-null}" >"$status_partial" &&
+    mv "$status_partial" "$status_file"
+}
+finish_interrupted() {
+  if [ "$cycle_active" -eq 1 ]; then
+    finished_at="\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+    write_status interrupted || true
+  fi
+}
+trap finish_interrupted EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+
 # dump <etiqueta> <ruta destino> <comando...>
 dump() {
   label="$1"
@@ -94,9 +117,16 @@ while true; do
   if ! flock -n 9; then
     echo "!! Hay otro ciclo de backup activo." >&2
     [ "$once" -eq 0 ] || exit 75
-    sleep "$BACKUP_INTERVAL"
+    # Un bloqueo de una acción breve no debe saltarse un día de backups.
+    retry_interval=30
+    [ "$BACKUP_INTERVAL" -ge 30 ] || retry_interval="$BACKUP_INTERVAL"
+    sleep "$retry_interval"
     continue
   fi
+  started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  finished_at=""
+  cycle_active=1
+  write_status running || { echo "!! No se pudo guardar el estado del backup." >&2; exit 1; }
   DATE=$(date +%F_%H-%M-%S)
   failed=0
   echo "[$DATE] Iniciando ciclo de backup..."
@@ -141,6 +171,11 @@ while true; do
   else
     echo "[$DATE] Ciclo TERMINADO CON ERRORES (ver arriba). Durmiendo ${BACKUP_INTERVAL}s..." >&2
   fi
+  finished_at="\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+  result=succeeded
+  [ "$failed" -eq 0 ] || result=failed
+  write_status "$result" || { echo "!! No se pudo guardar el resultado del backup." >&2; exit 1; }
+  cycle_active=0
   flock -u 9
   [ "$once" -eq 0 ] || exit "$failed"
   sleep "$BACKUP_INTERVAL"

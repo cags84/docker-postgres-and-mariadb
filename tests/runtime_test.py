@@ -117,8 +117,12 @@ with tempfile.TemporaryDirectory(prefix='cluster-sql-runtime-') as tmp:
             time.sleep(.5)
         else:
             raise AssertionError('El ciclo periódico no terminó')
+        automatic = request('backups/status')
+        assert automatic['automatic']['status'] == 'succeeded', automatic
+        assert automatic['automatic']['finishedAt']
         time.sleep(1)
         operation('backups', {})
+        assert request('backups/status') == automatic, 'El manual no debe sobrescribir el resultado automático'
         files = request('backups')
         for prefix, service in [('postgres_', 'postgres'), ('pgvector_', 'postgres-vector'), ('mariadb_', 'mariadb')]:
             latest = sorted(f['name'] for f in files if f['name'].startswith(prefix))[-1]
@@ -139,7 +143,20 @@ with tempfile.TemporaryDirectory(prefix='cluster-sql-runtime-') as tmp:
             time.sleep(.1)
         blocked = subprocess.run(compose + ['run', '--rm', '--no-deps', '-T', 'backup', '--once'], capture_output=True, text=True)
         assert blocked.returncode == 75, blocked.stderr
+        for service, action in [('postgres', 'restart'), ('pgadmin4', 'start'), ('phpmyadmin', 'start'), ('backup', 'restart')]:
+            before = command(['docker', 'inspect', '--format', '{{.State.StartedAt}}', container(service)])
+            job = request(f'services/{service}/actions', {'action': action})
+            for _ in range(100):
+                state = next(o for o in request('operations') if o['id'] == job['id'])
+                if state['status'] != 'running': break
+                time.sleep(.1)
+            assert state['status'] == 'failed' and 'curso' in state['output'], state
+            assert command(['docker', 'inspect', '--format', '{{.State.StartedAt}}', container(service)]) == before
+        print('OK: el bloqueo real protege bases y dependencias de las herramientas', flush=True)
         command(['docker', 'stop', '-t', '1', blocker]); blocker = None
+        operation('services/pgadmin4/actions', {'action': 'start'})
+        operation('services/postgres/actions', {'action': 'restart'})
+        print('OK: las acciones recuperan el bloqueo al terminar el ciclo', flush=True)
         ancient = backups / 'postgres_preservar_antiguo.sql.gz'
         shutil.copyfile(next(backups.glob('postgres_*.sql.gz')), ancient)
         old = time.time() - 12 * 86400

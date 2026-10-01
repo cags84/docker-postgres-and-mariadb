@@ -3,8 +3,8 @@
 # Servicio de backup del stack cluster-sql.
 # Se ejecuta dentro del container 'db-backup' (imagen postgres:17-alpine).
 #
-# Cada BACKUP_INTERVAL segundos genera un dump comprimido de cada base y borra
-# los que superen BACKUP_RETENTION_DAYS días.
+# Cada BACKUP_INTERVAL segundos genera un dump comprimido de cada base. Si los
+# tres terminan bien, borra los que superen BACKUP_RETENTION_DAYS días.
 #
 # Regla importante: un dump que falla NO deja archivo. Se escribe primero a
 # '<nombre>.part' y solo se renombra a '.sql.gz' si el comando terminó bien,
@@ -17,13 +17,12 @@ set -o pipefail
 BACKUP_DIR=/backups
 BACKUP_INTERVAL="${BACKUP_INTERVAL:-86400}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
-mkdir -p "$BACKUP_DIR"
 
 # --- Validación temprana --------------------------------------------------
 # Sin esto, una variable vacía en .env produce dumps de una base equivocada
 # (o inexistente) en silencio. Mejor fallar de entrada y decir cuál falta.
 missing=""
-for var in POSTGRES_USER POSTGRES_DB POSTGRES_VECTOR_DB \
+for var in PGPASSWORD POSTGRES_USER POSTGRES_DB POSTGRES_VECTOR_DB \
            MARIADB_ROOT_PASSWORD MARIADB_DATABASE; do
   eval "value=\${$var:-}"
   [ -n "$value" ] || missing="$missing $var"
@@ -33,6 +32,21 @@ if [ -n "$missing" ]; then
   echo "!! Complétalas en tu .env (usa .env.example como referencia)." >&2
   exit 1
 fi
+
+for var in BACKUP_INTERVAL BACKUP_RETENTION_DAYS; do
+  eval "value=\${$var}"
+  case "$value" in
+    ''|*[!0-9]*)
+      echo "!! $var debe ser un número entero sin signo." >&2
+      exit 1
+      ;;
+  esac
+done
+case "$BACKUP_INTERVAL" in
+  *[1-9]*) ;;
+  *) echo "!! BACKUP_INTERVAL debe ser mayor que cero." >&2; exit 1 ;;
+esac
+mkdir -p "$BACKUP_DIR" || exit 1
 
 # mariadb-dump lee la contraseña de MYSQL_PWD; pasarla como -p<pass> la dejaría
 # visible en la lista de procesos del container.
@@ -55,14 +69,13 @@ dump() {
   shift 2
   partial="${target}.part"
 
-  if "$@" | gzip -c >"$partial"; then
-    mv "$partial" "$target"
+  if "$@" | gzip -c >"$partial" && mv "$partial" "$target"; then
     echo "    ok     $(basename "$target")  ($(du -h "$target" | cut -f1))"
     return 0
   fi
 
   rm -f "$partial"
-  echo "    ERROR  $label: el dump falló, no se generó archivo" >&2
+  echo "    ERROR  $label: falló el dump o su guardado, no se generó un backup válido" >&2
   return 1
 }
 
@@ -94,8 +107,14 @@ while true; do
     failed=1
   fi
 
-  echo "[$DATE] Rotando backups de más de ${BACKUP_RETENTION_DAYS} días..."
-  find "$BACKUP_DIR" -type f -name '*.sql.gz' -mtime "+$BACKUP_RETENTION_DAYS" -delete
+  # Rotar solo tras respaldar las tres bases: una falla prolongada no debe
+  # eliminar las últimas copias válidas.
+  if [ "$failed" -eq 0 ]; then
+    echo "[$DATE] Rotando backups de más de ${BACKUP_RETENTION_DAYS} días..."
+    find "$BACKUP_DIR" -type f -name '*.sql.gz' -mtime "+$BACKUP_RETENTION_DAYS" -delete || failed=1
+  else
+    echo "[$DATE] Rotación omitida: se conservan los backups anteriores."
+  fi
   # Restos de intentos interrumpidos (p. ej. si se detuvo el container a media escritura).
   find "$BACKUP_DIR" -type f -name '*.sql.gz.part' -mtime +1 -delete
 

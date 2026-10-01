@@ -28,9 +28,8 @@ docker compose up -d       # levanta el stack (sin el backup)
 docker compose ps          # verifica que todo esté "healthy"
 ```
 
-> `.env.example` trae **todas** las variables que el compose necesita. Si borras alguna,
-> `docker compose up` avisa con `variable is not set` y el servicio afectado arranca mal
-> (por ejemplo, sin `POSTGRES_VECTOR_DB` la base vectorial se crea con el nombre del usuario).
+> `.env.example` trae **todas** las variables que el compose necesita. Si falta una
+> obligatoria o está vacía, Compose se detiene e indica cuál debes definir en `.env`.
 
 Para incluir backups automáticos (ver [Backups](#backups)):
 
@@ -265,15 +264,17 @@ backups/mariadb_<MARIADB_DATABASE>_2026-09-22_03-00-00.sql.gz
 
 | Variable de `.env`      | Por defecto | Qué hace |
 | ----------------------- | ----------- | -------- |
-| `BACKUP_INTERVAL`       | `86400`     | Segundos entre ciclos (86400 = 24 h) |
-| `BACKUP_RETENTION_DAYS` | `7`         | Borra los `.sql.gz` más antiguos que esto |
+| `BACKUP_INTERVAL`       | `86400`     | Segundos entre ciclos; entero mayor que cero (86400 = 24 h) |
+| `BACKUP_RETENTION_DAYS` | `7`         | Retención en días; entero igual o mayor que cero |
 | `UID` / `GID`           | `1000`      | Dueño de los archivos generados (solo Linux nativo) |
 
 **Un dump que falla no deja archivo.** El volcado se escribe primero como
 `.sql.gz.part` y solo se renombra si el comando terminó bien, para que un fallo
 (contraseña mala, base inexistente) no se disfrace de backup válido ni desplace a
-los buenos cuando corre la rotación. Si algo falla, el ciclo lo registra como
-`ERROR` y termina con `Ciclo TERMINADO CON ERRORES`.
+los buenos cuando corre la rotación. También se comprueba que el renombrado haya
+funcionado. Si algo falla, el ciclo lo registra como `ERROR` y termina con
+`Ciclo TERMINADO CON ERRORES`. **La rotación solo se ejecuta si los backups de las
+tres bases terminan bien**; durante una falla se conservan las copias anteriores.
 
 **Alcance:** se respalda **una base por servidor** — las que indican `POSTGRES_DB`,
 `POSTGRES_VECTOR_DB` y `MARIADB_DATABASE`. No incluye otras bases que hayas creado
@@ -416,17 +417,29 @@ locales) y recrea con `docker compose up -d`. Comprueba con `ss -ltn | grep <pue
 muestra `127.0.0.1` en vez de `0.0.0.0` o la IP esperada, el cambio no se aplicó. Ver
 [Acceso remoto](#acceso-remoto-lan-o-vpn) — y ojo, el firewall del host no interviene aquí.
 
-**`variable is not set. Defaulting to a blank string`**
-A tu `.env` le falta una variable que el compose usa. Compáralo con `.env.example`.
-El caso más silencioso es `POSTGRES_VECTOR_DB`: sin él, la base vectorial se crea con
-el nombre del usuario en vez del que esperas. Si el servicio `backup` detecta variables
-vacías se detiene y las lista en su log en vez de generar dumps equivocados.
+**`Define ... en .env` al ejecutar Compose**
+A tu `.env` le falta una variable obligatoria o está vacía. Compáralo con
+`.env.example`, completa el valor indicado y vuelve a ejecutar el comando.
+El backup también valida sus variables, el intervalo y la retención antes de empezar.
+
+**Cambié usuario, contraseña o base en `.env` y no se aplica**
+Las variables de inicialización de PostgreSQL y MariaDB crean usuarios y bases
+solo cuando el volumen está vacío. Recrear el contenedor conserva los datos y
+no cambia las credenciales existentes. Usa las credenciales anteriores para
+conectarte y actualiza el usuario con `ALTER ROLE` (PostgreSQL) o `ALTER USER`
+(MariaDB); crea las bases nuevas con `CREATE DATABASE`. Después ajusta `.env`
+y ejecuta `docker compose up -d` para actualizar los contenedores.
+Ver documentación de las imágenes oficiales de [PostgreSQL](https://hub.docker.com/_/postgres)
+y [MariaDB](https://hub.docker.com/_/mariadb).
 
 **"port is already allocated"**
 Ya tienes algo escuchando en ese puerto. Cambia el puerto en `.env` (`POSTGRES_PORT`, `MARIADB_PORT`, etc.) o detén el otro proceso.
 
 **El healthcheck nunca pasa a "healthy"**
-Mira los logs: `docker compose logs <servicio>`. Causa más común: contraseña incorrecta o conflicto del volumen con datos previos. Limpia con `docker compose down -v` (¡borra los datos!).
+Mira los logs: `docker compose logs <servicio>` y el resultado del chequeo con
+`docker inspect --format '{{json .State.Health}}' <contenedor>`. Revisa la
+configuración y si el volumen se inicializó con otros valores de `.env`
+(ver el caso anterior). Corrige la causa y ejecuta `docker compose up -d <servicio>`.
 
 **pgAdmin se reinicia en bucle: `'...' does not appear to be a valid email address`**
 `PGADMIN_DEFAULT_EMAIL` debe tener formato de email real (`admin@example.com` sirve). pgAdmin lo
@@ -434,7 +447,17 @@ valida en su primer arranque, al crear su base interna, aunque estés en modo lo
 Corrígelo en `.env` y ejecuta `docker compose up -d`.
 
 **pgAdmin da 401 Unauthorized al entrar**
-Si ves en los logs `sudo: The "no new privileges" flag is set` y `The desktop user ... was not found in the configuration database`: el entrypoint de pgAdmin necesita `sudo` para crear su "desktop user", y el flag `no-new-privileges` lo bloquea. En este compose pgAdmin ya está configurado **sin** ese flag por esa razón. Si modificaste el archivo y agregaste `security_opt: no-new-privileges:true` al servicio `pgadmin4`, quítalo. Reinicia con `docker compose down -v && docker compose up -d` (¡borra los datos!) o limpia solo el volumen de pgAdmin: `docker volume rm cluster-sql_pgadmin_data`.
+Si ves en los logs `sudo: The "no new privileges" flag is set` y `The desktop user ... was not found in the configuration database`: el entrypoint de pgAdmin necesita `sudo` para crear su "desktop user", y el flag `no-new-privileges` lo bloquea. En este compose pgAdmin ya está configurado **sin** ese flag por esa razón. Si lo agregaste, quítalo y ejecuta `docker compose up -d --force-recreate pgadmin4`.
+
+Si el error persiste, puedes reinicializar **solo pgAdmin**. Esto elimina sus
+conexiones y preferencias guardadas; conserva las bases PostgreSQL y MariaDB:
+
+```bash
+docker compose stop pgadmin4
+docker compose rm -f pgadmin4
+docker volume rm cluster-sql_pgadmin_data
+docker compose up -d pgadmin4
+```
 
 **En Windows todo va lentísimo**
 Asegúrate de que el proyecto está en el filesystem WSL2, no en `C:\`. Ver sección "Windows" arriba.

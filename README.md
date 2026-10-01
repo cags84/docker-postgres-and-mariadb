@@ -1,566 +1,170 @@
-# cluster-sql — stack de bases de datos para desarrollo
+# cluster-sql
 
-Pensado para desarrollo local, pero también para dejarlo corriendo en un servidor
-de la LAN o en una máquina remota accesible por VPN: el alcance de los puertos se
-decide con una variable, sin tocar el compose (ver [Acceso remoto](#acceso-remoto-lan-o-vpn)).
+Monorepo para administrar un stack local de PostgreSQL, PostgreSQL con pgvector y MariaDB. Incluye pgAdmin, phpMyAdmin, backups y un dashboard web. El dashboard se ejecuta en el host y controla Docker mediante su CLI.
 
-Listo para correr en tres entornos:
+## Estado actual
 
-| Plataforma | Runtime recomendado |
-| ---------- | ------------------- |
-| macOS      | **OrbStack** |
-| Windows    | **Docker Desktop** con backend **WSL2** |
-| Linux      | **Docker Engine** nativo (`docker-ce`) |
+- Dashboard con estado, salud, detalle del healthcheck y puertos publicados de los seis servicios del proyecto.
+- Logs en vivo, con pausa y reconexión; cada conexión empieza con las últimas 200 líneas y la pantalla conserva hasta 5.000.
+- Acciones para iniciar, detener y reiniciar servicios, con resultado visible en la actividad reciente.
+- Acceso a pgAdmin y phpMyAdmin mediante enlaces con los puertos reales.
+- Listado y descarga de dumps, backup manual y estado persistente del último ciclo automático.
+- Bloqueo compartido entre backups y acciones del dashboard que afectan sus bases o dependencias.
 
-Incluye **PostgreSQL 17**, **PostgreSQL 17 + pgvector**, **MariaDB LTS**, **pgAdmin 4**
-y **phpMyAdmin**, más un servicio opcional de **backups automáticos**
-([`backup.sh`](backup.sh)) que se activa con su propio perfil.
+El alcance es desarrollo local. No incluye autenticación, acceso remoto al dashboard, métricas de CPU/RAM, restauración o eliminación desde la UI, ni administración de otros proyectos Docker. La actividad de las acciones vive en memoria y se pierde al reiniciar la API; el resultado del backup automático permanece en disco.
 
-El stack se configura con `docker-compose.yml`, `backup.sh` y `.env.example`.
-El repositorio también incluye un dashboard local en un monorepo pnpm.
+## Requisitos
 
----
+- Docker activo y Docker Compose v2 disponibles en la terminal.
+- Node.js 24 (ver [.nvmrc](.nvmrc)) y pnpm 12.8.1 (ver [package.json](package.json)).
+- Python 3 para ejecutar las pruebas de backups y la integración con Docker.
 
-## Dashboard local
+Ejecuta los comandos desde la raíz del repositorio. En Windows, usa un entorno WSL2 con acceso a Docker y ejecuta también Node/pnpm allí.
 
-El dashboard muestra los seis servicios del proyecto `cluster-sql`, incluidos los
-que aún no tienen contenedor. Permite consultar salud y logs, iniciar/detener/reiniciar
-servicios, descargar backups, generar una copia de las tres bases y abrir pgAdmin
-o phpMyAdmin en otra pestaña. No permite restaurar ni borrar bases desde la UI.
+## Inicio
 
-Necesitas **Node.js 24**, **pnpm 12** y Docker con Compose. La aplicación usa la CLI
-con el contexto Docker activo al primer uso; para cambiar de contexto, reinicia la API.
-Todo funciona en el host, sin montar el socket en un contenedor del dashboard.
+1. Si aún no existe `.env`, copia la plantilla:
 
-```bash
-cp .env.example .env          # completa tus valores si todavía no tienes .env
-pnpm install
-pnpm dev                     # http://127.0.0.1:5173
-```
+   ```sh
+   cp .env.example .env
+   ```
 
-El dashboard puede iniciar los servicios desde sus botones. También puedes hacerlo
-con `docker compose up -d` antes de abrirlo. Se actualiza cada cinco segundos y marca
-la información como desactualizada si Docker no responde. Los logs cargan 200 líneas
-al conectar, retienen hasta 5.000 y permiten pausar/reanudar; reanudar vuelve a cargar
-las últimas 200 líneas.
+   Edita usuarios, contraseñas, nombres de las tres bases y el correo de pgAdmin. No sobrescribas un `.env` existente. Las credenciales de la plantilla son ejemplos.
 
-Para ejecutar el build:
+2. Valida y levanta las bases y sus herramientas:
 
-```bash
+   ```sh
+   docker compose config --quiet
+   docker compose up -d --wait
+   ```
+
+3. Instala las dependencias e inicia el dashboard:
+
+   ```sh
+   pnpm install --frozen-lockfile
+   pnpm dev
+   ```
+
+Abre [http://127.0.0.1:5173](http://127.0.0.1:5173). Vite sirve la web en 5173 y redirige `/api` a la API en 3000. El dashboard también muestra los servicios que todavía no se han creado; iniciarlos requiere un `.env` válido.
+
+Para servir la aplicación compilada sin Vite:
+
+```sh
 pnpm build
-pnpm start                   # http://127.0.0.1:3000
+pnpm start
 ```
 
-La API escucha solo en `127.0.0.1`, valida origen/host y no tiene login: es una
-herramienta individual local. El proceso controla Docker con los permisos de tu
-usuario; no lo publiques en la red ni lo pongas detrás de un proxy remoto.
-Las operaciones recientes se guardan en memoria y se pierden al reiniciar la API.
-Un cierre de la aplicación no revierte operaciones ya enviadas a Docker.
+Abre [http://127.0.0.1:3000](http://127.0.0.1:3000). El servidor usa los archivos compilados de `apps/web/dist`; vuelve a compilar después de cambiar el código.
 
-Los accesos a herramientas usan los puertos publicados de los contenedores, sin
-credenciales en la URL. `backup` no tiene healthcheck: estar en ejecución no certifica
-que el último respaldo haya terminado bien. El dashboard muestra el **último ciclo
-automático** con inicio, fin y resultado (completado, fallido o interrumpido). El
-estado se guarda en `backups/.backup-status-automatic.json` y sobrevive al reinicio
-de la API. Los ciclos manuales guardan su resultado por separado y no sobrescriben
-el automático. Si nunca se ha ejecutado el script actualizado, aparecerá «Sin ciclos
-registrados». Los logs conservan el detalle de cada error.
+## Servicios y conexiones
 
-Estructura: `apps/web` (React/Vite), `apps/api` (Fastify/Docker) y
-`packages/contracts` (tipos y validación compartida). No hay base de datos adicional.
+Los puertos siguientes son los valores de `.env.example`; puedes modificarlos en `.env`.
 
-```bash
-pnpm lint
-pnpm typecheck
-pnpm test                    # necesita Python 3 para las pruebas del script
-python3 tests/runtime_test.py # prueba aislada con Docker, después de pnpm build
+| Servicio Compose | Imagen | Acceso desde el host | Dentro de la red Compose |
+| --- | --- | --- | --- |
+| `postgres` | `postgres:17-trixie` | `127.0.0.1:5432` | `postgres:5432` |
+| `postgres-vector` | `pgvector/pgvector:pg17-trixie` | `127.0.0.1:5433` | `postgres-vector:5432` |
+| `mariadb` | `mariadb:lts-ubi9` | `127.0.0.1:3306` | `mariadb:3306` |
+| `pgadmin4` | `dpage/pgadmin4:9` | [localhost:8081](http://127.0.0.1:8081) | `pgadmin4:80` |
+| `phpmyadmin` | `phpmyadmin:5` | [localhost:8082](http://127.0.0.1:8082) | `phpmyadmin:80` |
+| `backup` | `cluster-sql-backup:pg17` (construida localmente) | Carpeta `backups/` | Sin puerto publicado |
+
+En pgAdmin registra los servidores como `postgres:5432` y `postgres-vector:5432`, usando `POSTGRES_USER` y `POSTGRES_PASS`. Ambas instancias comparten esas credenciales, pero tienen bases y volúmenes separados. phpMyAdmin apunta a `mariadb`; ingresa con un usuario de MariaDB.
+
+La imagen pgvector incluye la extensión, pero debes habilitarla en cada base donde la necesites:
+
+```sh
+docker compose exec postgres-vector sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "CREATE EXTENSION IF NOT EXISTS vector;"'
 ```
 
-Para pruebas aisladas, la API admite `DASHBOARD_PROJECT`, `DASHBOARD_COMPOSE_FILE`,
-`DASHBOARD_ENV_FILE`, `DASHBOARD_BACKUPS_DIR` y `DASHBOARD_PORT` como variables del
-proceso. Las rutas se resuelven desde la raíz del repositorio. No cambian `.env`;
-la configuración por defecto usa este proyecto y su carpeta `backups/`.
-
----
-
-## Inicio rápido (igual en los 3 entornos)
-
-```bash
-cp .env.example .env       # ajusta usuarios, contraseñas y nombres de las bases
-docker compose up -d       # levanta el stack (sin el backup)
-docker compose ps          # verifica que todo esté "healthy"
-```
-
-> `.env.example` trae **todas** las variables que el compose necesita. Si falta una
-> obligatoria o está vacía, Compose se detiene e indica cuál debes definir en `.env`.
-
-Para incluir backups automáticos (ver [Backups](#backups)):
-
-```bash
-docker compose --profile backup up -d
-```
-
-Para que el stack sea accesible desde otro equipo, define `BIND_ADDRESS` en tu `.env`
-antes de levantarlo (ver [Acceso remoto](#acceso-remoto-lan-o-vpn)).
-
-Detener todo (manteniendo los datos):
-
-```bash
-docker compose down
-```
-
-Borrar todo, incluidos los datos:
-
-```bash
-docker compose down -v
-```
-
----
-
-## Servicios y puertos
-
-Por defecto todos los puertos quedan atados a `127.0.0.1` (solo accesibles desde tu máquina, no
-desde la WiFi). Para llegar desde otro equipo, mira [Acceso remoto](#acceso-remoto-lan-o-vpn).
-Los puertos y los nombres de las bases salen de tu `.env`; abajo se muestran los valores por defecto.
-
-| Servicio          | URL / Conexión   | Puerto en `.env`        | Base de datos en `.env` |
-| ----------------- | ---------------- | ----------------------- | ----------------------- |
-| PostgreSQL        | `localhost:5432` | `POSTGRES_PORT`         | `POSTGRES_DB`           |
-| PostgreSQL vector | `localhost:5433` | `POSTGRES_VECTOR_PORT`  | `POSTGRES_VECTOR_DB`    |
-| MariaDB           | `localhost:3306` | `MARIADB_PORT`          | `MARIADB_DATABASE`      |
-| pgAdmin 4         | http://localhost:8081 | `PGADMIN_PORT`     | —                       |
-| phpMyAdmin        | http://localhost:8082 | `PMA_PORT`         | —                       |
-
-### Bonus si usas OrbStack
-
-OrbStack genera un dominio automático para cada servicio del compose, con HTTPS incluido. No hace falta recordar puertos:
-
-| Servicio          | Dominio OrbStack                                    |
-| ----------------- | --------------------------------------------------- |
-| pgAdmin 4         | https://pgadmin4.cluster-sql.orb.local              |
-| phpMyAdmin        | https://phpmyadmin.cluster-sql.orb.local            |
-| PostgreSQL        | `postgres.cluster-sql.orb.local:5432`               |
-| PostgreSQL vector | `postgres-vector.cluster-sql.orb.local:5432`        |
-| MariaDB           | `mariadb.cluster-sql.orb.local:3306`                |
-
-> El TLD es `.orb.local`. Los certificados HTTPS los genera OrbStack y se confían automáticamente en macOS — no aparece la advertencia del navegador.
-
-### Entrar a pgAdmin y phpMyAdmin
-
-**pgAdmin 4.** Con `PGADMIN_SERVER_MODE=False` (el valor local) entra sin pedir login.
-Con `True` pide `PGADMIN_DEFAULT_EMAIL` y `PGADMIN_DEFAULT_PASSWORD`. Los servidores se
-registran a mano la primera vez (*Register → Server*), usando los nombres de servicio
-porque pgAdmin corre dentro de la red del compose:
-
-| Servidor          | Host              | Puerto | Usuario / contraseña              |
-| ----------------- | ----------------- | ------ | --------------------------------- |
-| PostgreSQL        | `postgres`        | `5432` | `POSTGRES_USER` / `POSTGRES_PASS` |
-| PostgreSQL vector | `postgres-vector` | `5432` | `POSTGRES_USER` / `POSTGRES_PASS` |
-
-> El puerto es siempre el interno `5432`, no `POSTGRES_PORT` ni `POSTGRES_VECTOR_PORT`.
-
-**phpMyAdmin.** Pide usuario y contraseña de MariaDB en su pantalla de login: tu
-`MARIADB_USER` / `MARIADB_PASSWORD`, o `root` / `MARIADB_ROOT_PASSWORD`. Ninguna contraseña
-se le pasa por el compose. Si aparece el campo *Servidor* (`PMA_ARBITRARY=1`), escribe `mariadb`.
-
----
-
-## Conectar desde tu app
-
-### FastAPI corriendo en el host
-
-Sustituye los valores por los que pusiste en tu `.env`:
-
-```python
-# Postgres principal   -> POSTGRES_USER : POSTGRES_PASS @ POSTGRES_PORT / POSTGRES_DB
-DATABASE_URL = "postgresql+asyncpg://mi_usuario:mi_password@localhost:5432/mi_base"
-
-# Postgres con pgvector -> POSTGRES_USER : POSTGRES_PASS @ POSTGRES_VECTOR_PORT / POSTGRES_VECTOR_DB
-VECTOR_DATABASE_URL = "postgresql+asyncpg://mi_usuario:mi_password@localhost:5433/mi_base_vector"
-```
-
-> Los dos Postgres comparten `POSTGRES_USER` y `POSTGRES_PASS`; solo cambian la base y el puerto.
-
-### Laravel corriendo en el host — `.env` del proyecto Laravel
-
-```env
-DB_CONNECTION=mariadb
-DB_HOST=127.0.0.1
-DB_PORT=3306          # MARIADB_PORT
-DB_DATABASE=mi_base   # MARIADB_DATABASE
-DB_USERNAME=mi_usuario   # MARIADB_USER
-DB_PASSWORD=mi_password  # MARIADB_PASSWORD
-```
-
-### Si tu app también corre en Docker
-
-Únela a la red `cluster-sql_db_network` y usa los nombres de servicio (`postgres`, `mariadb`, `postgres-vector`) como host:
-
-```yaml
-# en el compose de tu app
-services:
-  api:
-    networks: [cluster-sql_db_network]
-
-networks:
-  cluster-sql_db_network:
-    external: true
-```
-
-Dentro del container la URL queda así:
-
-```python
-# Ojo: dentro de la red se usa el puerto interno 5432, no POSTGRES_PORT.
-DATABASE_URL = "postgresql+asyncpg://mi_usuario:mi_password@postgres:5432/mi_base"
-```
-
----
-
-## Habilitar la extensión `vector` (primera vez)
-
-Usa el usuario y la base que definiste como `POSTGRES_USER` y `POSTGRES_VECTOR_DB`:
-
-```bash
-docker exec -it postgres-vector \
-  psql -U mi_usuario -d mi_base_vector -c "CREATE EXTENSION IF NOT EXISTS vector;"
-```
-
----
-
-## Zona horaria
-
-Una sola variable para todo el stack:
-
-```bash
-# .env
-TZ=America/Bogota
-```
-
-Afecta a los logs de las cinco bases y UIs, y a la hora que llevan los nombres de
-los archivos de backup. Si no la defines, todo corre en `UTC`.
-
-Si algún servicio necesita una zona distinta, tiene su propio override, que gana
-sobre `TZ`: `POSTGRES_TZ` (aplica a los dos Postgres), `MARIADB_TZ`, `PMA_TZ`,
-`PGADMIN_TZ` y `BACKUP_TZ`. Rara vez hace falta.
-
-> **Si vienes de una versión anterior del stack**, tu `.env` tendrá `POSTGRES_TZ`,
-> `MARIADB_TZ` y `PMA_TZ` pero no `TZ`. Esos tres siguen funcionando, pero pgAdmin y
-> el servicio de backup colgaban de `POSTGRES_TZ` y ahora no: pasarán a `UTC` hasta
-> que añadas `TZ=...` a tu `.env`. Se nota sobre todo en la hora de los nombres de
-> los backups. Añadir la línea `TZ` lo resuelve, y puedes borrar las otras tres.
-
-## Acceso remoto (LAN o VPN)
-
-Si Docker corre en otra máquina —un servidor de la LAN, o uno accesible por VPN—
-necesitas que los puertos escuchen fuera de `localhost`. Lo controla una sola
-variable, `BIND_ADDRESS`:
-
-| Valor | Escucha en | Cuándo |
-| ----- | ---------- | ------ |
-| `127.0.0.1` | solo esa máquina | Desarrollo local. **Por defecto.** |
-| `0.0.0.0` | todas las interfaces | LAN de confianza. Expone a todo lo que alcance el host. |
-| `10.x.x.x`, `100.x.x.x`… | solo esa interfaz | **La mejor opción con VPN**: usa la IP que te da la VPN. |
-
-```bash
-# .env
-BIND_ADDRESS=0.0.0.0
-```
-
-```bash
-docker compose up -d           # recrea los containers con el nuevo bind
-ss -ltn | grep 5432            # comprueba: debe decir 0.0.0.0, no 127.0.0.1
-```
-
-Desde el otro equipo se conecta igual, cambiando `localhost` por la IP del servidor:
-
-```python
-DATABASE_URL = "postgresql+asyncpg://mi_usuario:mi_password@192.168.1.50:5432/mi_base"
-```
-
-### Al exponer, cambia también estas dos
-
-En local son comodidades; con el puerto abierto son agujeros reales.
-
-| Variable | Local | Remoto | Por qué |
-| -------- | ----- | ------ | ------- |
-| `PGADMIN_SERVER_MODE` | `False` | **`True`** | En `False` pgAdmin usa *"an automatic default login"*: entra **sin pedir contraseña**, con tus conexiones ya guardadas. Su propia documentación avisa: *"DO NOT DISABLE SERVER MODE IF RUNNING ON A WEBSERVER!!"*. En `True` exige `PGADMIN_DEFAULT_EMAIL` + `PGADMIN_DEFAULT_PASSWORD`. |
-| `PMA_ARBITRARY` | `1` | **`0`** | En `1` la pantalla de login de phpMyAdmin acepta **cualquier host** MySQL/MariaDB, así que sirve de trampolín hacia otras bases alcanzables desde el container. En `0` solo habla con el MariaDB del compose. |
-
-Y ahora las contraseñas del `.env` sí importan: en local casi daba igual lo que
-pusieras porque nada salía de tu máquina.
-
-### El firewall del host no te protege
-
-Esto sorprende a mucha gente. Un `ufw deny 5432` **no cierra** un puerto publicado por
-Docker. La documentación de Docker lo dice sin rodeos:
-
-> *"When you publish a container's ports using Docker, traffic to and from that
-> container gets diverted before it goes through the ufw firewall settings."*
-
-El motivo es que Docker enruta en la tabla `nat`, y los paquetes se desvían antes de
-llegar a las cadenas `INPUT`/`OUTPUT` que usa ufw. Con `firewalld` no es exactamente un
-bypass, pero Docker crea una zona `docker` con target `ACCEPT`, con el mismo efecto
-práctico.
-
-**Consecuencia:** no publiques en `0.0.0.0` confiando en cerrarlo luego con el firewall.
-Ata `BIND_ADDRESS` a la IP de la VPN, que es la interfaz por la que de verdad quieres
-recibir tráfico.
+Los datos persisten en los volúmenes `postgres_data`, `pg_vector_data`, `mariadb_data` y `pgadmin_data` del proyecto Compose `cluster-sql`. Cambiar las credenciales o nombres de bases en `.env` no modifica las bases ya inicializadas: realiza esos cambios con SQL y actualiza la configuración correspondiente.
 
 ## Backups
 
-La imagen se construye desde `docker/backup/Dockerfile`, con clientes PostgreSQL y
-MariaDB, zonas horarias y `flock`. No instala paquetes durante un ciclo. Después
-de actualizar desde la imagen anterior, ejecuta:
+Para activar el servicio periódico:
 
-```bash
-docker compose --profile backup build backup
-docker compose --profile backup up -d backup
+```sh
+docker compose --profile backup up -d --build backup
 ```
 
+El primer ciclo empieza al arrancar. `BACKUP_INTERVAL` define la espera entre ciclos (86.400 segundos por defecto) y `BACKUP_RETENTION_DAYS` la retención (7 por defecto). En Linux, ajusta `UID` y `GID` al propietario deseado de los archivos.
 
-El servicio `backup` es **opcional** y solo arranca con su perfil:
+El botón de backup manual requiere las tres bases en ejecución y saludables. No necesita mantener activo el servicio periódico. Su equivalente por terminal es:
 
-```bash
-docker compose --profile backup up -d
-docker compose logs -f backup      # ver cada ciclo
-```
-
-La lógica está en [`backup.sh`](backup.sh) (se monta dentro del container, así que
-puedes editarlo y aplicar con `docker compose restart backup`). Cada
-`BACKUP_INTERVAL` segundos vuelca las tres bases a `./backups/`:
-
-```
-backups/postgres_<POSTGRES_DB>_2026-09-22_03-00-00.sql.gz
-backups/pgvector_<POSTGRES_VECTOR_DB>_2026-09-22_03-00-00.sql.gz
-backups/mariadb_<MARIADB_DATABASE>_2026-09-22_03-00-00.sql.gz
-```
-
-| Variable de `.env`      | Por defecto | Qué hace |
-| ----------------------- | ----------- | -------- |
-| `BACKUP_INTERVAL`       | `86400`     | Segundos entre ciclos; entero mayor que cero (86400 = 24 h) |
-| `BACKUP_RETENTION_DAYS` | `7`         | Retención en días; entero igual o mayor que cero |
-| `UID` / `GID`           | `1000`      | Dueño de los archivos generados (solo Linux nativo) |
-
-**Un dump que falla no deja archivo.** El volcado se escribe primero como
-`.sql.gz.part` y solo se renombra si el comando terminó bien, para que un fallo
-(contraseña mala, base inexistente) no se disfrace de backup válido ni desplace a
-los buenos cuando corre la rotación. También se comprueba que el renombrado haya
-funcionado. Si algo falla, el ciclo lo registra como `ERROR` y termina con
-`Ciclo TERMINADO CON ERRORES`. **La rotación solo se ejecuta si los backups de las
-tres bases terminan bien**; durante una falla se conservan las copias anteriores.
-
-**Alcance:** se respalda **una base por servidor** — las que indican `POSTGRES_DB`,
-`POSTGRES_VECTOR_DB` y `MARIADB_DATABASE`. No incluye otras bases que hayas creado
-a mano ni los roles globales de PostgreSQL (eso sería `pg_dumpall --globals-only`).
-
-### Ejecutar un ciclo único
-
-Desde el dashboard, **Generar backup** ejecuta un contenedor temporal que se elimina
-al finalizar. También puedes hacerlo por CLI, con las tres bases ya iniciadas:
-
-```bash
+```sh
+docker compose build backup
 docker compose --profile backup run --rm --no-deps -T backup --once
 ```
 
-El script devuelve `0` al completar las tres copias, `1` si falla alguna y `75` si
-otro ciclo ya está activo. El ciclo manual y el periódico comparten un bloqueo en
-`backups/.backup.lock`; el bloqueo se libera al terminar el proceso. El archivo del
-bloqueo puede permanecer en el directorio y no debe borrarse mientras haya ciclos
-activos. Las acciones del dashboard que afectan bases o pueden iniciarlas como dependencias
-(compartidas por pgAdmin/phpMyAdmin) adquieren ese mismo bloqueo durante la operación.
-Si hay un ciclo activo, la acción falla sin modificar los contenedores. Un ciclo
-periódico que encuentre el bloqueo ocupado reintenta en hasta 30 segundos, para no
-saltarse un día de backups por una acción breve. Los comandos Docker ejecutados
-manualmente fuera del dashboard no pasan por esta protección. Si falla una copia, conserva las anteriores y omite la rotación.
+Cada ciclo genera tres dumps SQL comprimidos en `backups/`: uno de `POSTGRES_DB`, uno de `POSTGRES_VECTOR_DB` y uno de `MARIADB_DATABASE`. No respalda otras bases, roles globales de PostgreSQL ni la configuración de pgAdmin. El backup de cada base es independiente; el ciclo no es una instantánea sincronizada de las tres.
 
-### Backup manual a demanda
+Los archivos se escriben como `.sql.gz.part` y se publican como `.sql.gz` solo cuando el dump termina correctamente. La rotación usa `find -mtime +BACKUP_RETENTION_DAYS` y solo se ejecuta si los tres dumps tuvieron éxito; los fallos conservan las copias anteriores.
 
-Sin necesidad de levantar el servicio:
+`backups/.backup.lock` impide ciclos simultáneos. Las acciones del dashboard que afectan bases o sus dependencias usan el mismo bloqueo mediante un contenedor temporal. Los comandos Docker ejecutados directamente fuera del dashboard no pasan por esa protección.
 
-```bash
-docker exec postgres pg_dump -U mi_usuario mi_base | gzip > backup_$(date +%F).sql.gz
+El script guarda el último estado en `.backup-status-automatic.json` y `.backup-status-manual.json`. El dashboard muestra el automático: en curso, completado, fallido o interrumpido. Si todavía no existe, muestra que no hay un ciclo registrado. Las fechas del estado se guardan en UTC; los nombres de los dumps usan la zona horaria del servicio. No se guarda un historial de ciclos.
+
+La restauración se realiza por CLI o por las herramientas de gestión. Selecciona el archivo, la instancia y la base de destino, y valida la recuperación antes de depender de una copia. La prueba de integración incluye una restauración real de las tres bases y de datos vectoriales.
+
+Si cambias `backup.sh`, reinicia `backup`; si cambias su Dockerfile, reconstruye y recrea el servicio:
+
+```sh
+docker compose --profile backup restart backup
+# Después de cambiar docker/backup/Dockerfile:
+docker compose --profile backup up -d --build backup
 ```
 
-### Restaurar
+## Configuración del dashboard
 
-```bash
-# PostgreSQL (los dumps se generan con --clean --if-exists: reemplazan lo que haya)
-gunzip -c backups/postgres_mi_base_2026-09-22_03-00-00.sql.gz \
-  | docker exec -i postgres psql -U mi_usuario -d mi_base
+Estas variables se pasan al proceso Node mediante su entorno; no se cargan automáticamente desde `.env`. Ese archivo configura Compose.
 
-# MariaDB (la contraseña sale de la variable del container: un -p interactivo
-# aquí leería la primera línea del dump como contraseña, porque stdin es el dump)
-gunzip -c backups/mariadb_mi_base_2026-09-22_03-00-00.sql.gz \
-  | docker exec -i mariadb sh -c 'exec mariadb -u root -p"$MARIADB_ROOT_PASSWORD" mi_base'
-```
+| Variable | Valor predeterminado | Uso |
+| --- | --- | --- |
+| `DASHBOARD_PROJECT` | `cluster-sql` | Filtrado por etiqueta de proyecto Compose |
+| `DASHBOARD_COMPOSE_FILE` | `docker-compose.yml` | Archivo para ejecutar las acciones |
+| `DASHBOARD_ENV_FILE` | Sin override | Archivo de variables alternativo para Compose |
+| `DASHBOARD_BACKUPS_DIR` | `backups` | Carpeta que lista y sirve la API |
+| `DASHBOARD_PORT` | `3000` | Puerto de la API y de la web compilada |
 
-## Notas por plataforma
+Las rutas relativas se resuelven desde la raíz del repositorio. El directorio de backups de la API debe corresponder al montaje `/backups` de Compose. Mantén coherentes el proyecto, el archivo Compose y sus etiquetas.
 
-### 🍎 macOS con OrbStack
+La API fija el contexto Docker al usarlo por primera vez y lo muestra en el dashboard. Si cambias de contexto, reinicia la API. Solo administra los seis nombres de servicio definidos en el proyecto; excluye contenedores temporales de `compose run`.
 
-**Instalación:**
-```bash
-brew install --cask orbstack
-```
-o descargar desde https://orbstack.dev.
+Para cambiar el puerto, usa la aplicación compilada, por ejemplo `DASHBOARD_PORT=3001 pnpm start`. En desarrollo, el proxy Vite apunta a 3000 y requiere modificar también `apps/web/vite.config.ts` si cambias ese puerto.
 
-**Por qué OrbStack y no Docker Desktop:**
-- Arranca en ~2 segundos vs varios segundos de Docker Desktop.
-- Menor consumo de RAM/CPU en idle (decenas de MB vs varios GB).
-- Bind mounts notablemente más rápidos (VirtioFS optimizado nativamente).
-- Soporta Rosetta nativamente para imágenes amd64 (no las necesitamos aquí porque las del compose son multi-arch).
-- CLI 100% compatible con `docker` y `docker compose` — el compose funciona sin modificar nada.
+## Acceso remoto
 
-**No necesitas configurar nada de recursos**: OrbStack auto-ajusta la VM según el host. A diferencia de Docker Desktop, no hay un panel "Settings → Resources" que ajustar.
+`BIND_ADDRESS=127.0.0.1` publica las bases y sus herramientas únicamente en el host. Cambiarlo a una IP de LAN/VPN o a `0.0.0.0` amplía ese acceso. Antes de hacerlo, configura credenciales propias, `PGADMIN_SERVER_MODE=True`, `PMA_ARBITRARY=0` y las restricciones de acceso de tu entorno.
 
-**Comandos útiles específicos de OrbStack:**
-```bash
-orb                    # abre la app
-orb logs postgres      # logs del container
-open ~/OrbStack        # navegar volúmenes desde Finder
-```
+El dashboard sigue ligado a `127.0.0.1`, sin autenticación y con validación de Host/Origin local. `BIND_ADDRESS` no cambia su dirección de escucha. No está preparado para publicarse en la red.
 
-### 🪟 Windows con Docker Desktop + WSL2
+`TZ` configura la zona horaria del stack; `POSTGRES_TZ`, `MARIADB_TZ`, `PMA_TZ`, `PGADMIN_TZ` y `BACKUP_TZ` permiten overrides por servicio.
 
-**Instalación:**
-1. Habilita WSL2: en PowerShell como administrador `wsl --install`.
-2. Instala una distro Linux desde Microsoft Store (Ubuntu 24.04 LTS recomendado).
-3. Descarga Docker Desktop desde https://www.docker.com/products/docker-desktop. Durante la instalación marca **"Use WSL 2 instead of Hyper-V"**.
-4. En Docker Desktop → Settings → Resources → WSL Integration: activa la integración con tu distro.
+## Desarrollo y validación
 
-**Regla de oro de performance:**
-> El proyecto debe vivir **dentro del filesystem de WSL2**, no en `C:\Users\...`.
+| Comando | Verificación |
+| --- | --- |
+| `pnpm lint` | ESLint |
+| `pnpm typecheck` | Tipos de contratos, API y web |
+| `pnpm test` | Pruebas de API, componentes web y script de backups |
+| `pnpm build` | Compilación de los tres paquetes |
+| `python3 tests/runtime_test.py` | Integración real con Docker, después de compilar |
 
-Concretamente:
-- ✅ Bien: `/home/tu-usuario/proyectos/cluster-sql/` (dentro de Ubuntu WSL)
-- ❌ Mal: `C:\Users\tu-usuario\proyectos\cluster-sql\` (en NTFS, accedido vía `/mnt/c/`)
+La integración crea un proyecto temporal, puertos de bases asignados por Docker y volúmenes propios. Verifica servicios, enlaces, acciones, bloqueos, backups, descargas y restauración; elimina sus recursos al finalizar. Necesita Docker activo, imágenes disponibles y el puerto 3010 libre. Con `--keep`, conserva el entorno mientras inspeccionas la UI; termina con Ctrl+C para ejecutar la limpieza.
 
-La diferencia es enorme: bind mounts en `/mnt/c/` son lentísimos. En el filesystem WSL2 son casi como Linux nativo.
+## Diagnóstico
 
-**Cómo trabajar:**
-- Abre la terminal de Ubuntu WSL y trabaja desde ahí.
-- En VS Code instala la extensión **WSL** y abre la carpeta con `code .` desde dentro de WSL.
-- Desde el Explorador de Windows accedes vía `\\wsl$\Ubuntu\home\tu-usuario\...` si necesitas.
+- **Variables ausentes:** revisa `.env` y ejecuta `docker compose config --quiet`.
+- **Docker no responde o faltan servicios:** comprueba `docker info`, `docker context show` y `docker compose ps -a`; reinicia la API después de cambiar de contexto.
+- **Servicio no saludable:** consulta su detalle en el dashboard o `docker compose logs --tail 100 NOMBRE_SERVICIO`.
+- **Puerto ocupado:** cambia el puerto del servicio en `.env` y recréalo con `docker compose up -d NOMBRE_SERVICIO`.
+- **Acción bloqueada:** espera a que termine el backup o la operación dependiente y revisa su resultado en actividad reciente.
+- **Credenciales nuevas no funcionan:** el volumen conserva las credenciales anteriores; cambiar `.env` no las reemplaza.
 
-**Comandos útiles:**
-```powershell
-wsl --update              # actualiza el kernel de WSL2
-wsl --status              # versión y distro por defecto
-wsl --shutdown            # reinicia WSL si Docker se vuelve raro
-```
+`docker compose down` elimina contenedores y red, conservando los volúmenes. Añadir `-v` elimina los datos persistentes; no lo uses como solución rutinaria a errores.
 
-### 🐧 Linux nativo (Docker Engine)
+## Mapa del repositorio
 
-**Instalación:**
-```bash
-# Sigue las instrucciones oficiales para tu distro:
-# https://docs.docker.com/engine/install/
+Consulta [AGENTS.md](AGENTS.md) para orientarte al trabajar con agentes o LLMs. La implementación se divide entre `apps/web`, `apps/api` y `packages/contracts`; la infraestructura vive en `docker-compose.yml`, `backup.sh` y `docker/backup/`.
 
-# Después, agrégate al grupo docker para no tener que usar sudo:
-sudo usermod -aG docker $USER
-newgrp docker
-
-# Verifica:
-docker compose version
-```
-
-**Particularidades de Linux:**
-- No hay VM intermedia: bind mounts son a nivel de kernel, máxima performance.
-- El `chown -R $UID:$GID /backups` del servicio backup **sí funciona aquí** — los archivos quedan con tu usuario en el host. En macOS/Windows ese paso no aplica (la traducción de UID la hace la VM).
-- Asegúrate de que `UID` y `GID` en `.env` coincidan con tu usuario:
-  ```bash
-  echo "UID=$(id -u)"
-  echo "GID=$(id -g)"
-  ```
-
----
-
-## Comandos útiles del día a día
-
-```bash
-# Ver logs en vivo
-docker compose logs -f postgres
-
-# Reiniciar un solo servicio
-docker compose restart mariadb
-
-# Entrar a un container
-docker exec -it postgres psql -U mi_usuario -d mi_base
-docker exec -it mariadb mariadb -u root -p
-
-# Ver estado de salud de todos los servicios
-docker compose ps
-
-# Aplicar una versión nueva del stack (tras git pull): recrea solo los
-# servicios cuya configuración cambió; los datos de los volúmenes se conservan
-git pull && docker compose up -d
-```
-
----
-
-## Troubleshooting
-
-**Las horas salen en UTC y yo esperaba mi zona**
-Define `TZ` en tu `.env` (ver [Zona horaria](#zona-horaria)). Pasa al actualizar desde
-una versión anterior, donde la zona se definía con tres variables separadas.
-
-**No puedo conectar desde otra máquina**
-Revisa `BIND_ADDRESS` en tu `.env` (por defecto es `127.0.0.1`, que solo acepta conexiones
-locales) y recrea con `docker compose up -d`. Comprueba con `ss -ltn | grep <puerto>`: si
-muestra `127.0.0.1` en vez de `0.0.0.0` o la IP esperada, el cambio no se aplicó. Ver
-[Acceso remoto](#acceso-remoto-lan-o-vpn) — y ojo, el firewall del host no interviene aquí.
-
-**`Define ... en .env` al ejecutar Compose**
-A tu `.env` le falta una variable obligatoria o está vacía. Compáralo con
-`.env.example`, completa el valor indicado y vuelve a ejecutar el comando.
-El backup también valida sus variables, el intervalo y la retención antes de empezar.
-
-**Cambié usuario, contraseña o base en `.env` y no se aplica**
-Las variables de inicialización de PostgreSQL y MariaDB crean usuarios y bases
-solo cuando el volumen está vacío. Recrear el contenedor conserva los datos y
-no cambia las credenciales existentes. Usa las credenciales anteriores para
-conectarte y actualiza el usuario con `ALTER ROLE` (PostgreSQL) o `ALTER USER`
-(MariaDB); crea las bases nuevas con `CREATE DATABASE`. Después ajusta `.env`
-y ejecuta `docker compose up -d` para actualizar los contenedores.
-Ver documentación de las imágenes oficiales de [PostgreSQL](https://hub.docker.com/_/postgres)
-y [MariaDB](https://hub.docker.com/_/mariadb).
-
-**"port is already allocated"**
-Ya tienes algo escuchando en ese puerto. Cambia el puerto en `.env` (`POSTGRES_PORT`, `MARIADB_PORT`, etc.) o detén el otro proceso.
-
-**El healthcheck nunca pasa a "healthy"**
-Mira los logs: `docker compose logs <servicio>` y el resultado del chequeo con
-`docker inspect --format '{{json .State.Health}}' <contenedor>`. Revisa la
-configuración y si el volumen se inicializó con otros valores de `.env`
-(ver el caso anterior). Corrige la causa y ejecuta `docker compose up -d <servicio>`.
-
-**pgAdmin se reinicia en bucle: `'...' does not appear to be a valid email address`**
-`PGADMIN_DEFAULT_EMAIL` debe tener formato de email real (`admin@example.com` sirve). pgAdmin lo
-valida en su primer arranque, al crear su base interna, aunque estés en modo local sin login.
-Corrígelo en `.env` y ejecuta `docker compose up -d`.
-
-**pgAdmin da 401 Unauthorized al entrar**
-Si ves en los logs `sudo: The "no new privileges" flag is set` y `The desktop user ... was not found in the configuration database`: el entrypoint de pgAdmin necesita `sudo` para crear su "desktop user", y el flag `no-new-privileges` lo bloquea. En este compose pgAdmin ya está configurado **sin** ese flag por esa razón. Si lo agregaste, quítalo y ejecuta `docker compose up -d --force-recreate pgadmin4`.
-
-Si el error persiste, puedes reinicializar **solo pgAdmin**. Esto elimina sus
-conexiones y preferencias guardadas; conserva las bases PostgreSQL y MariaDB:
-
-```bash
-docker compose stop pgadmin4
-docker compose rm -f pgadmin4
-docker volume rm cluster-sql_pgadmin_data
-docker compose up -d pgadmin4
-```
-
-**En Windows todo va lentísimo**
-Asegúrate de que el proyecto está en el filesystem WSL2, no en `C:\`. Ver sección "Windows" arriba.
-
-**En macOS los puertos no responden después de `compose up`**
-Espera unos segundos al primer arranque (sobre todo de pgAdmin, que tarda en inicializar). Verifica `docker compose ps` que estén `healthy`.
-
----
-
-## Licencia
-
-[MIT](LICENSE) © 2026 Carlos Guzman. Úsalo, cópialo y modifícalo libremente;
-lo único que se pide es conservar el aviso de copyright. Sin garantía de ningún tipo.
+Licencia [MIT](LICENSE).

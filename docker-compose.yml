@@ -211,7 +211,9 @@ services:
   # ==========================================================================
   backup:
     <<: *common
-    image: postgres:17-alpine # trae pg_dump de PG17; el cliente de MariaDB lo instala backup.sh
+    build:
+      context: ./docker/backup
+    image: cluster-sql-backup:pg17
     container_name: db-backup
     security_opt:
       - no-new-privileges:true

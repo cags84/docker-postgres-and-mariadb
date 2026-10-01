@@ -28,3 +28,8 @@ Thumbs.db
 [Dd]esktop.ini
 *~
 .vscode/
+
+# Dashboard
+node_modules/
+dist/
+coverage/

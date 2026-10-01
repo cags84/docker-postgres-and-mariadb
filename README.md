@@ -16,7 +16,65 @@ Incluye **PostgreSQL 17**, **PostgreSQL 17 + pgvector**, **MariaDB LTS**, **pgAd
 y **phpMyAdmin**, más un servicio opcional de **backups automáticos**
 ([`backup.sh`](backup.sh)) que se activa con su propio perfil.
 
-El repo es deliberadamente pequeño: `docker-compose.yml`, `backup.sh`, `.env.example` y este README.
+El stack se configura con `docker-compose.yml`, `backup.sh` y `.env.example`.
+El repositorio también incluye un dashboard local en un monorepo pnpm.
+
+---
+
+## Dashboard local
+
+El dashboard muestra los seis servicios del proyecto `cluster-sql`, incluidos los
+que aún no tienen contenedor. Permite consultar salud y logs, iniciar/detener/reiniciar
+servicios, descargar backups, generar una copia de las tres bases y abrir pgAdmin
+o phpMyAdmin en otra pestaña. No permite restaurar ni borrar bases desde la UI.
+
+Necesitas **Node.js 24**, **pnpm 12** y Docker con Compose. La aplicación usa la CLI
+con el contexto Docker activo al primer uso; para cambiar de contexto, reinicia la API.
+Todo funciona en el host, sin montar el socket en un contenedor del dashboard.
+
+```bash
+cp .env.example .env          # completa tus valores si todavía no tienes .env
+pnpm install
+pnpm dev                     # http://127.0.0.1:5173
+```
+
+El dashboard puede iniciar los servicios desde sus botones. También puedes hacerlo
+con `docker compose up -d` antes de abrirlo. Se actualiza cada cinco segundos y marca
+la información como desactualizada si Docker no responde. Los logs cargan 200 líneas
+al conectar, retienen hasta 5.000 y permiten pausar/reanudar; reanudar vuelve a cargar
+las últimas 200 líneas.
+
+Para ejecutar el build:
+
+```bash
+pnpm build
+pnpm start                   # http://127.0.0.1:3000
+```
+
+La API escucha solo en `127.0.0.1`, valida origen/host y no tiene login: es una
+herramienta individual local. El proceso controla Docker con los permisos de tu
+usuario; no lo publiques en la red ni lo pongas detrás de un proxy remoto.
+Las operaciones recientes se guardan en memoria y se pierden al reiniciar la API.
+Un cierre de la aplicación no revierte operaciones ya enviadas a Docker.
+
+Los accesos a herramientas usan los puertos publicados de los contenedores, sin
+credenciales en la URL. `backup` no tiene healthcheck: estar en ejecución no certifica
+que el último respaldo haya terminado bien; consulta sus logs y los archivos.
+
+Estructura: `apps/web` (React/Vite), `apps/api` (Fastify/Docker) y
+`packages/contracts` (tipos y validación compartida). No hay base de datos adicional.
+
+```bash
+pnpm lint
+pnpm typecheck
+pnpm test                    # necesita Python 3 para las pruebas del script
+python3 tests/runtime_test.py # prueba aislada con Docker, después de pnpm build
+```
+
+Para pruebas aisladas, la API admite `DASHBOARD_PROJECT`, `DASHBOARD_COMPOSE_FILE`,
+`DASHBOARD_ENV_FILE`, `DASHBOARD_BACKUPS_DIR` y `DASHBOARD_PORT` como variables del
+proceso. Las rutas se resuelven desde la raíz del repositorio. No cambian `.env`;
+la configuración por defecto usa este proyecto y su carpeta `backups/`.
 
 ---
 
@@ -245,6 +303,16 @@ recibir tráfico.
 
 ## Backups
 
+La imagen se construye desde `docker/backup/Dockerfile`, con clientes PostgreSQL y
+MariaDB, zonas horarias y `flock`. No instala paquetes durante un ciclo. Después
+de actualizar desde la imagen anterior, ejecuta:
+
+```bash
+docker compose --profile backup build backup
+docker compose --profile backup up -d backup
+```
+
+
 El servicio `backup` es **opcional** y solo arranca con su perfil:
 
 ```bash
@@ -279,6 +347,22 @@ tres bases terminan bien**; durante una falla se conservan las copias anteriores
 **Alcance:** se respalda **una base por servidor** — las que indican `POSTGRES_DB`,
 `POSTGRES_VECTOR_DB` y `MARIADB_DATABASE`. No incluye otras bases que hayas creado
 a mano ni los roles globales de PostgreSQL (eso sería `pg_dumpall --globals-only`).
+
+### Ejecutar un ciclo único
+
+Desde el dashboard, **Generar backup** ejecuta un contenedor temporal que se elimina
+al finalizar. También puedes hacerlo por CLI, con las tres bases ya iniciadas:
+
+```bash
+docker compose --profile backup run --rm --no-deps -T backup --once
+```
+
+El script devuelve `0` al completar las tres copias, `1` si falla alguna y `75` si
+otro ciclo ya está activo. El ciclo manual y el periódico comparten un bloqueo en
+`backups/.backup.lock`; el bloqueo se libera al terminar el proceso. El archivo del
+bloqueo puede permanecer en el directorio y no debe borrarse mientras haya ciclos
+activos. Un ciclo periódico que encuentre el bloqueo ocupado espera al siguiente
+intervalo. Si falla una copia, conserva las anteriores y omite la rotación.
 
 ### Backup manual a demanda
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 # ============================================================================
 # Servicio de backup del stack cluster-sql.
-# Se ejecuta dentro del container 'db-backup' (imagen postgres:17-alpine).
+# Se ejecuta dentro del container 'db-backup' (imagen basada en PostgreSQL 17).
 #
 # Cada BACKUP_INTERVAL segundos genera un dump comprimido de cada base. Si los
 # tres terminan bien, borra los que superen BACKUP_RETENTION_DAYS días.
@@ -14,6 +14,13 @@
 set -u
 set -o pipefail
 
+once=0
+case "${1:-}" in
+  '') ;;
+  --once) once=1 ;;
+  *) echo "Uso: backup.sh [--once]" >&2; exit 2 ;;
+esac
+[ "$#" -le 1 ] || { echo "Uso: backup.sh [--once]" >&2; exit 2; }
 BACKUP_DIR=/backups
 BACKUP_INTERVAL="${BACKUP_INTERVAL:-86400}"
 BACKUP_RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
@@ -52,15 +59,17 @@ mkdir -p "$BACKUP_DIR" || exit 1
 # visible en la lista de procesos del container.
 export MYSQL_PWD="$MARIADB_ROOT_PASSWORD"
 
-# --- Dependencias ---------------------------------------------------------
-# La imagen base solo trae el cliente de PostgreSQL.
-if ! command -v mariadb-dump >/dev/null 2>&1; then
-  echo "==> Instalando mariadb-client..."
-  if ! apk add --no-cache mariadb-client tzdata >/dev/null; then
-    echo "!! No se pudo instalar mariadb-client (¿sin conexión?)." >&2
-    echo "!! Los backups de PostgreSQL continúan; los de MariaDB se omitirán." >&2
-  fi
-fi
+# Las dependencias se instalan al construir la imagen, no durante el backup.
+for command in pg_dump mariadb-dump gzip flock; do
+  command -v "$command" >/dev/null 2>&1 || {
+    echo "!! Falta $command. Reconstruye la imagen de backup." >&2
+    exit 1
+  }
+done
+
+# El descriptor se comparte entre contenedores mediante el directorio montado.
+# flock libera el bloqueo automáticamente, incluso si el proceso se interrumpe.
+exec 9>"$BACKUP_DIR/.backup.lock" || exit 1
 
 # dump <etiqueta> <ruta destino> <comando...>
 dump() {
@@ -82,6 +91,12 @@ dump() {
 echo "==> Backup activo (intervalo=${BACKUP_INTERVAL}s, retención=${BACKUP_RETENTION_DAYS}d, destino=${BACKUP_DIR})"
 
 while true; do
+  if ! flock -n 9; then
+    echo "!! Hay otro ciclo de backup activo." >&2
+    [ "$once" -eq 0 ] || exit 75
+    sleep "$BACKUP_INTERVAL"
+    continue
+  fi
   DATE=$(date +%F_%H-%M-%S)
   failed=0
   echo "[$DATE] Iniciando ciclo de backup..."
@@ -126,5 +141,7 @@ while true; do
   else
     echo "[$DATE] Ciclo TERMINADO CON ERRORES (ver arriba). Durmiendo ${BACKUP_INTERVAL}s..." >&2
   fi
+  flock -u 9
+  [ "$once" -eq 0 ] || exit "$failed"
   sleep "$BACKUP_INTERVAL"
 done
